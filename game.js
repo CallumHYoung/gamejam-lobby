@@ -1429,7 +1429,7 @@ const portals = [];
 const textureLoader = new THREE.TextureLoader();
 textureLoader.setCrossOrigin('anonymous');
 
-function makePortal({ title, url, colorHex, position, radius = 1.8, thumbnailUrl = null }) {
+function makePortal({ title, url, colorHex, position, radius = 1.8, thumbnailUrl = null, flipThumbY = false }) {
   const group = new THREE.Group();
   group.position.copy(position);
   group.lookAt(new THREE.Vector3(0, position.y, 0));
@@ -1475,6 +1475,10 @@ function makePortal({ title, url, colorHex, position, radius = 1.8, thumbnailUrl
       thumbnailUrl,
       tex => {
         tex.colorSpace = THREE.SRGBColorSpace;
+        if (flipThumbY) {
+          tex.center.set(0.5, 0.5);
+          tex.repeat.set(1, -1);
+        }
         disk.material.map = tex;
         disk.material.color.set(0xffffff);
         disk.material.opacity = 0.92;
@@ -1516,6 +1520,7 @@ async function setupPortals() {
       colorHex,
       position: new THREE.Vector3(Math.cos(angle) * radius, 2.4, Math.sin(angle) * radius),
       thumbnailUrl: resolveThumb(g),
+      flipThumbY: !!g.thumbnailFlipY,
     });
   });
 
@@ -1530,6 +1535,7 @@ async function setupPortals() {
       position: new THREE.Vector3(0, 2.2, -4),
       radius: 1.5,
       thumbnailUrl: resolveThumb(refGame),
+      flipThumbY: !!(refGame && refGame.thumbnailFlipY),
     });
   }
 }
