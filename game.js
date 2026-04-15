@@ -819,7 +819,7 @@ document.addEventListener('pointerlockchange', () => {
 });
 document.addEventListener('mousemove', e => {
   if (!pointerLocked) return;
-  camYaw   += e.movementX * MOUSE_SENS;
+  camYaw   -= e.movementX * MOUSE_SENS;
   camPitch += e.movementY * MOUSE_SENS;
   if (camPitch < CAM_PITCH_MIN) camPitch = CAM_PITCH_MIN;
   if (camPitch > CAM_PITCH_MAX) camPitch = CAM_PITCH_MAX;
