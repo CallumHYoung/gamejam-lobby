@@ -849,6 +849,14 @@ function collideBallWithPlayer(ball) {
       basePos: planeGrp.position.clone(),
       baseYaw: planeGrp.rotation.y,
       pitch: 0,
+      // When a remote peer is piloting, we lerp our local plane toward
+      // their broadcast pose each frame. When they land (or no one is
+      // flying), the target just stays put so the plane sits still.
+      targetX: planeGrp.position.x,
+      targetY: planeGrp.position.y,
+      targetZ: planeGrp.position.z,
+      targetYaw: planeGrp.rotation.y,
+      targetPitch: 0,
     };
   }
 
@@ -1471,10 +1479,19 @@ function exitPlane() {
   player.yaw = plane.group.rotation.y;
   player.velY = 0;
   player.grounded = true;
-  // Reset the plane back to its parked pose.
+  // Reset the plane back to its parked pose and re-peg the lerp targets
+  // so the non-local-pilot path doesn't fight us back toward old targets.
   plane.group.position.copy(plane.basePos);
   plane.group.rotation.set(0, plane.baseYaw, 0);
   plane.pitch = 0;
+  plane.targetX = plane.basePos.x;
+  plane.targetY = plane.basePos.y;
+  plane.targetZ = plane.basePos.z;
+  plane.targetYaw = plane.baseYaw;
+  plane.targetPitch = 0;
+  // Push one broadcast right now so peers see the final piloting=false
+  // + reset pose immediately instead of waiting up to ~80ms.
+  broadcastSelf();
 }
 
 function updatePlane(dt) {
@@ -2009,7 +2026,7 @@ function refreshPeerCount() {
 }
 function broadcastSelf() {
   if (!sendState) return;
-  sendState({
+  const payload = {
     x: player.pos.x,
     y: player.pos.y,
     z: player.pos.z,
@@ -2020,7 +2037,18 @@ function broadcastSelf() {
     grounded: player.grounded,
     seated: !!player.seatedBench,
     piloting: !!player.piloting,
-  });
+  };
+  // Only the current pilot broadcasts plane pose. On exit we still
+  // send one final frame (piloting=false) carrying the reset base
+  // pose, so peers lerp the plane back to the parked spot.
+  if (plane) {
+    payload.planeX = plane.group.position.x;
+    payload.planeY = plane.group.position.y;
+    payload.planeZ = plane.group.position.z;
+    payload.planeYaw = plane.group.rotation.y;
+    payload.planePitch = plane.pitch;
+  }
+  sendState(payload);
 }
 
 async function loadTrystero() {
@@ -2109,6 +2137,7 @@ async function setupMultiplayer() {
       const prevRY = peer.state?.renderY ?? data.y ?? 0;
       const prevRZ = peer.state?.renderZ ?? data.z ?? 0;
       const prevName = peer.state?.username;
+      const prevPiloting = !!peer.state?.piloting;
       peer.state = {
         x: data.x ?? 0,
         y: data.y ?? 0,
@@ -2134,6 +2163,21 @@ async function setupMultiplayer() {
         setAvatarName(peer.group, peer.state.username, peer.state.color);
       }
       peer.group.visible = !peer.state.piloting;
+
+      // Relay the pilot's plane pose into our local plane so everyone
+      // sees the same aircraft. Accept updates from a peer who is
+      // piloting — or was on the previous frame (so the "just landed"
+      // broadcast, which carries piloting=false + the reset base
+      // pose, still resyncs the plane back to the runway).
+      if (plane && !player.piloting
+          && typeof data.planeX === 'number'
+          && (peer.state.piloting || prevPiloting)) {
+        plane.targetX = data.planeX;
+        plane.targetY = data.planeY;
+        plane.targetZ = data.planeZ;
+        plane.targetYaw = data.planeYaw ?? plane.targetYaw;
+        plane.targetPitch = data.planePitch ?? plane.targetPitch;
+      }
     });
 
     getC((data, peerId) => handleChat(data, peerId, false));
@@ -2199,6 +2243,26 @@ function update(dt) {
     player.grounded = true;
   } else {
     updatePlayerMovement(dt);
+    // When a remote peer is piloting, ease the local plane toward the
+    // broadcast pose so everyone sees it fly. The prop keeps spinning
+    // until it's (nearly) back on the parked spot.
+    if (plane) {
+      const k = Math.min(1, dt * 8);
+      plane.group.position.x += (plane.targetX - plane.group.position.x) * k;
+      plane.group.position.y += (plane.targetY - plane.group.position.y) * k;
+      plane.group.position.z += (plane.targetZ - plane.group.position.z) * k;
+      let dyaw = plane.targetYaw - plane.group.rotation.y;
+      while (dyaw >  Math.PI) dyaw -= Math.PI * 2;
+      while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+      plane.group.rotation.y += dyaw * k;
+      plane.pitch += (plane.targetPitch - plane.pitch) * k;
+      plane.group.rotation.x = plane.pitch;
+      const parkedDx = plane.group.position.x - plane.basePos.x;
+      const parkedDy = plane.group.position.y - plane.basePos.y;
+      const parkedDz = plane.group.position.z - plane.basePos.z;
+      const airborne = (parkedDx * parkedDx + parkedDy * parkedDy + parkedDz * parkedDz) > 0.25;
+      if (airborne) plane.prop.rotation.z += 35 * dt;
+    }
   }
 
   // Balls: held balls attach to the local player (and get broadcast
