@@ -48,7 +48,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color('#0a0514');
 scene.fog = new THREE.Fog('#0a0514', 45, 170);
 
-const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 300);
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 500);
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
@@ -56,16 +56,143 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight, false);
 });
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.4));
-const keyLight = new THREE.DirectionalLight(0xffffff, 0.7);
-keyLight.position.set(8, 20, 10);
-scene.add(keyLight);
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+scene.add(ambientLight);
+const sunLight = new THREE.DirectionalLight(0xffffff, 0.7);
+sunLight.position.set(8, 20, 10);
+scene.add(sunLight);
 const accentLight = new THREE.PointLight(0xc64bff, 1.4, 60);
 accentLight.position.set(0, 10, 0);
 scene.add(accentLight);
 const fillLight = new THREE.PointLight(0x4ff0ff, 0.8, 50);
 fillLight.position.set(0, 3, -18);
 scene.add(fillLight);
+
+// ------------------------------------------------------------------
+// Day / night cycle + skybox + stars
+// ------------------------------------------------------------------
+
+const CYCLE_LENGTH = 15 * 60;  // 15 min total
+const DAY_LENGTH   = 10 * 60;  // 10 min of day
+const TRANSITION   = 60;       // 1 min dawn / 1 min dusk
+
+const DAY_ZENITH   = new THREE.Color('#3f7cd8');
+const DAY_HORIZON  = new THREE.Color('#cfe3ff');
+const NIGHT_ZENITH = new THREE.Color('#040616');
+const NIGHT_HORIZON = new THREE.Color('#100a30');
+
+const DAY_FOG      = new THREE.Color('#9cb3d8');
+const NIGHT_FOG    = new THREE.Color('#0a0820');
+
+const DAY_BG       = new THREE.Color('#cfe3ff');
+const NIGHT_BG     = new THREE.Color('#040616');
+
+const DAY_AMBIENT_COLOR   = new THREE.Color('#ffffff');
+const NIGHT_AMBIENT_COLOR = new THREE.Color('#6880b8');
+
+const DAY_SUN_COLOR   = new THREE.Color('#fff8e0');
+const NIGHT_SUN_COLOR = new THREE.Color('#4a60a0');
+
+// Skybox — large inverted sphere with a gradient shader. Ignores fog
+// (the ShaderMaterial has no fog uniforms) so it stays visible even
+// at the far plane of scene.fog.
+const skyMat = new THREE.ShaderMaterial({
+  uniforms: {
+    uTopColor:    { value: new THREE.Color('#3f7cd8') },
+    uBottomColor: { value: new THREE.Color('#cfe3ff') },
+  },
+  vertexShader: `
+    varying vec3 vWorldPos;
+    void main() {
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      vWorldPos = wp.xyz;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }
+  `,
+  fragmentShader: `
+    uniform vec3 uTopColor;
+    uniform vec3 uBottomColor;
+    varying vec3 vWorldPos;
+    void main() {
+      float h = normalize(vWorldPos).y;
+      float t = smoothstep(-0.15, 0.45, h);
+      gl_FragColor = vec4(mix(uBottomColor, uTopColor, t), 1.0);
+    }
+  `,
+  side: THREE.BackSide,
+  depthWrite: false,
+  depthTest: false,
+});
+const sky = new THREE.Mesh(new THREE.SphereGeometry(320, 32, 20), skyMat);
+sky.renderOrder = -1;
+scene.add(sky);
+
+// Stars — hidden during the day, revealed at night.
+const stars = (() => {
+  const starCount = 420;
+  const geom = new THREE.BufferGeometry();
+  const positions = new Float32Array(starCount * 3);
+  for (let i = 0; i < starCount; i++) {
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(Math.random() * 0.85 + 0.05); // upper-ish hemisphere
+    const r = 300;
+    positions[i * 3 + 0] = r * Math.sin(phi) * Math.cos(theta);
+    positions[i * 3 + 1] = r * Math.cos(phi);
+    positions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+  }
+  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const mat = new THREE.PointsMaterial({
+    color: 0xffffff,
+    size: 1.6,
+    sizeAttenuation: true,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    fog: false,
+  });
+  const pts = new THREE.Points(geom, mat);
+  pts.renderOrder = 0;
+  scene.add(pts);
+  return pts;
+})();
+
+const streetLamps = [];
+
+function getDayFactor(nowSec) {
+  const t = nowSec % CYCLE_LENGTH;
+  const duskStart  = DAY_LENGTH - TRANSITION;
+  const nightStart = DAY_LENGTH;
+  const dawnStart  = CYCLE_LENGTH - TRANSITION;
+  if (t < duskStart)  return 1;
+  if (t < nightStart) return 1 - (t - duskStart) / TRANSITION;
+  if (t < dawnStart)  return 0;
+  return (t - dawnStart) / TRANSITION;
+}
+
+function updateDayNight(nowSec) {
+  const d = getDayFactor(nowSec);
+  const n = 1 - d;
+
+  skyMat.uniforms.uTopColor.value.lerpColors(NIGHT_ZENITH, DAY_ZENITH, d);
+  skyMat.uniforms.uBottomColor.value.lerpColors(NIGHT_HORIZON, DAY_HORIZON, d);
+
+  scene.background.lerpColors(NIGHT_BG, DAY_BG, d);
+  scene.fog.color.lerpColors(NIGHT_FOG, DAY_FOG, d);
+
+  ambientLight.intensity = 0.15 + d * 0.3;
+  ambientLight.color.lerpColors(NIGHT_AMBIENT_COLOR, DAY_AMBIENT_COLOR, d);
+
+  sunLight.intensity = d * 0.85 + n * 0.12;
+  sunLight.color.lerpColors(NIGHT_SUN_COLOR, DAY_SUN_COLOR, d);
+
+  stars.material.opacity = Math.pow(n, 1.6);
+
+  for (const lamp of streetLamps) {
+    lamp.light.intensity = n * 2.0;
+    lamp.light.visible = n > 0.02;
+    lamp.bulbMat.emissiveIntensity = 0.08 + n * 1.1;
+  }
+}
 
 // Floor
 const floor = new THREE.Mesh(
@@ -284,6 +411,52 @@ function collideBallWithPlayer(ball) {
   scene.add(grass);
 
   const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
+  // Street lamps at each sector approach — four total to stay within
+  // the WebGL light budget. Their PointLight + bulb emissive ramp
+  // from off (day) to full (night) via updateDayNight.
+  function makeLamp(x, z) {
+    const grp = new THREE.Group();
+    grp.position.set(x, 0, z);
+
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0x2b2b33, roughness: 0.75 });
+    const pole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.12, 0.16, 4, 10),
+      poleMat
+    );
+    pole.position.y = 2;
+    grp.add(pole);
+
+    const arm = new THREE.Mesh(
+      new THREE.BoxGeometry(0.9, 0.1, 0.1),
+      poleMat
+    );
+    arm.position.set(0.45, 4, 0);
+    grp.add(arm);
+
+    const bulbMat = new THREE.MeshStandardMaterial({
+      color: 0xfff2c0,
+      emissive: 0xffd88a,
+      emissiveIntensity: 0.1,
+    });
+    const bulb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.24, 14, 10),
+      bulbMat
+    );
+    bulb.position.set(0.85, 3.95, 0);
+    grp.add(bulb);
+
+    const light = new THREE.PointLight(0xffd88a, 0, 16, 1.6);
+    light.position.set(0.85, 3.7, 0);
+    grp.add(light);
+
+    scene.add(grp);
+    streetLamps.push({ bulbMat, light });
+  }
+  makeLamp(0, -30);   // soccer approach
+  makeLamp(30, 0);    // basketball approach
+  makeLamp(0, 30);    // airfield approach
+  makeLamp(-30, 0);   // park approach
 
   // ---------- Soccer pitch (north, -Z) ----------
   {
@@ -1807,6 +1980,7 @@ function update(dt) {
 function loop() {
   const dt = Math.min(0.05, clock.getDelta());
   update(dt);
+  updateDayNight(performance.now() / 1000);
   updateCamera(dt);
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
