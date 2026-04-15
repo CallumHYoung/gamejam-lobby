@@ -156,10 +156,15 @@ const parkourPlatforms = [];
   });
 }
 
+const PLAYER_RADIUS = 0.4;
+const PLAYER_HEIGHT = 1.6;
+const COL_EPS = 0.05;
+
 function supportHeightAt(x, z, maxY) {
   let h = 0; // floor
   for (const p of parkourPlatforms) {
-    if (Math.abs(x - p.x) < p.sx && Math.abs(z - p.z) < p.sz) {
+    if (Math.abs(x - p.x) < p.sx + PLAYER_RADIUS * 0.5 &&
+        Math.abs(z - p.z) < p.sz + PLAYER_RADIUS * 0.5) {
       const top = p.y + p.sy;
       if (top <= maxY + 0.05 && top > h) h = top;
     }
@@ -167,8 +172,38 @@ function supportHeightAt(x, z, maxY) {
   return h;
 }
 
+// Side-hitbox test: does the player's body AABB overlap any platform's
+// AABB at the given trial position? Used for separate-axis horizontal
+// collision so you can slide along a wall instead of stopping dead.
+function collidesAt(x, y, z) {
+  const pyBot = y + COL_EPS;
+  const pyTop = y + PLAYER_HEIGHT - COL_EPS;
+  for (const p of parkourPlatforms) {
+    if (Math.abs(x - p.x) >= p.sx + PLAYER_RADIUS) continue;
+    if (Math.abs(z - p.z) >= p.sz + PLAYER_RADIUS) continue;
+    const platTop = p.y + p.sy;
+    const platBot = p.y - p.sy;
+    if (pyTop > platBot + COL_EPS && pyBot < platTop - COL_EPS) return true;
+  }
+  return false;
+}
+
 const GRAVITY = 22;
 const JUMP_IMPULSE = 10;
+const MAX_RADIUS = 24;
+
+function resolveHorizontal(dx, dz) {
+  const tryX = player.pos.x + dx;
+  if (Math.hypot(tryX, player.pos.z) <= MAX_RADIUS &&
+      !collidesAt(tryX, player.pos.y, player.pos.z)) {
+    player.pos.x = tryX;
+  }
+  const tryZ = player.pos.z + dz;
+  if (Math.hypot(player.pos.x, tryZ) <= MAX_RADIUS &&
+      !collidesAt(player.pos.x, player.pos.y, tryZ)) {
+    player.pos.z = tryZ;
+  }
+}
 
 // ------------------------------------------------------------------
 // Label sprites (name tags, portal titles, chat bubbles)
@@ -562,17 +597,39 @@ const player = {
 };
 scene.add(player.group);
 
-// Camera follow
-const camOffset = new THREE.Vector3(0, 7.5, 11);
-const camLookOffset = new THREE.Vector3(0, 1.2, 0);
-const tmpCamTarget = new THREE.Vector3();
+// Orbit camera — pointer-lock mouse look.
+let camYaw = 0;
+let camPitch = 0.35;
+let camDistance = 6;
+const CAM_PITCH_MIN = -0.15;
+const CAM_PITCH_MAX = 1.2;
+const CAM_DISTANCE_MIN = 3;
+const CAM_DISTANCE_MAX = 14;
+const MOUSE_SENS = 0.0028;
+let pointerLocked = false;
+
 function updateCamera(dt) {
-  tmpCamTarget.copy(player.pos).add(camOffset);
-  camera.position.lerp(tmpCamTarget, Math.min(1, dt * 5));
-  camera.lookAt(player.pos.clone().add(camLookOffset));
+  const horizR = camDistance * Math.cos(camPitch);
+  const targetX = player.pos.x + Math.sin(camYaw) * horizR;
+  const targetY = player.pos.y + 1.2 + Math.sin(camPitch) * camDistance;
+  const targetZ = player.pos.z + Math.cos(camYaw) * horizR;
+  const k = Math.min(1, dt * 14);
+  camera.position.x += (targetX - camera.position.x) * k;
+  camera.position.y += (targetY - camera.position.y) * k;
+  camera.position.z += (targetZ - camera.position.z) * k;
+  camera.lookAt(player.pos.x, player.pos.y + 1.2, player.pos.z);
 }
-camera.position.copy(player.pos).add(camOffset);
-camera.lookAt(player.pos.clone().add(camLookOffset));
+
+// Snap camera on first frame.
+{
+  const horizR = camDistance * Math.cos(camPitch);
+  camera.position.set(
+    player.pos.x + Math.sin(camYaw) * horizR,
+    player.pos.y + 1.2 + Math.sin(camPitch) * camDistance,
+    player.pos.z + Math.cos(camYaw) * horizR
+  );
+  camera.lookAt(player.pos.x, player.pos.y + 1.2, player.pos.z);
+}
 
 // ------------------------------------------------------------------
 // Portals
@@ -748,6 +805,37 @@ addEventListener('keyup', e => {
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 
 // ------------------------------------------------------------------
+// Pointer lock (mouse look)
+// ------------------------------------------------------------------
+
+canvas.addEventListener('click', () => {
+  if (isMenuOpen()) return;
+  if (document.pointerLockElement !== canvas) {
+    canvas.requestPointerLock();
+  }
+});
+document.addEventListener('pointerlockchange', () => {
+  pointerLocked = document.pointerLockElement === canvas;
+});
+document.addEventListener('mousemove', e => {
+  if (!pointerLocked) return;
+  camYaw   += e.movementX * MOUSE_SENS;
+  camPitch += e.movementY * MOUSE_SENS;
+  if (camPitch < CAM_PITCH_MIN) camPitch = CAM_PITCH_MIN;
+  if (camPitch > CAM_PITCH_MAX) camPitch = CAM_PITCH_MAX;
+});
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  camDistance += e.deltaY * 0.008;
+  if (camDistance < CAM_DISTANCE_MIN) camDistance = CAM_DISTANCE_MIN;
+  if (camDistance > CAM_DISTANCE_MAX) camDistance = CAM_DISTANCE_MAX;
+}, { passive: false });
+
+function releasePointerLock() {
+  if (document.pointerLockElement === canvas) document.exitPointerLock();
+}
+
+// ------------------------------------------------------------------
 // Chat UI
 // ------------------------------------------------------------------
 
@@ -814,6 +902,7 @@ function handleChat(msg, peerId, isSelf) {
 }
 
 function openChat() {
+  releasePointerLock();
   for (const k in keys) keys[k] = false;
   chatInput.style.display = 'block';
   chatInput.value = '';
@@ -840,6 +929,7 @@ chatInput.addEventListener('keydown', e => {
 // ------------------------------------------------------------------
 
 function openNameInput() {
+  releasePointerLock();
   for (const k in keys) keys[k] = false;
   nameInput.style.display = 'block';
   nameInput.value = username.startsWith('guest-') ? '' : username;
@@ -910,6 +1000,7 @@ function buildEmoteWheel() {
 buildEmoteWheel();
 
 function openEmoteWheel() {
+  releasePointerLock();
   wheelOpen = true;
   for (const k in keys) keys[k] = false;
   emoteWheel.hidden = false;
@@ -1081,28 +1172,31 @@ addEventListener('beforeunload', () => {
 const clock = new THREE.Clock();
 let redirecting = false;
 let lastBroadcast = 0;
-const MAX_RADIUS = 24;
 
 function update(dt) {
-  // Movement (locked out while chat/name/emote-wheel is open)
-  let mx = 0, mz = 0;
+  // Movement is camera-relative: W = toward where the camera looks.
+  let iFwd = 0, iRight = 0;
   if (!isMenuOpen()) {
-    if (keys['w'] || keys['arrowup'])    mz -= 1;
-    if (keys['s'] || keys['arrowdown'])  mz += 1;
-    if (keys['a'] || keys['arrowleft'])  mx -= 1;
-    if (keys['d'] || keys['arrowright']) mx += 1;
+    if (keys['w'] || keys['arrowup'])    iFwd  += 1;
+    if (keys['s'] || keys['arrowdown'])  iFwd  -= 1;
+    if (keys['d'] || keys['arrowright']) iRight += 1;
+    if (keys['a'] || keys['arrowleft'])  iRight -= 1;
   }
-  player.isMoving = (mx !== 0 || mz !== 0);
+  player.isMoving = (iFwd !== 0 || iRight !== 0);
   if (player.isMoving) {
+    // Camera forward on XZ plane (from camera toward player).
+    const fx = -Math.sin(camYaw);
+    const fz = -Math.cos(camYaw);
+    // Right = forward × up = (-fz, 0, fx).
+    const rx = -fz;
+    const rz =  fx;
+    let mx = iFwd * fx + iRight * rx;
+    let mz = iFwd * fz + iRight * rz;
     const len = Math.hypot(mx, mz);
     mx /= len; mz /= len;
-    player.pos.x += mx * player.speed * dt;
-    player.pos.z += mz * player.speed * dt;
-    const r = Math.hypot(player.pos.x, player.pos.z);
-    if (r > MAX_RADIUS) {
-      player.pos.x *= MAX_RADIUS / r;
-      player.pos.z *= MAX_RADIUS / r;
-    }
+
+    resolveHorizontal(mx * player.speed * dt, mz * player.speed * dt);
+
     const targetYaw = Math.atan2(mx, mz);
     let diff = targetYaw - player.yaw;
     while (diff > Math.PI)  diff -= Math.PI * 2;
