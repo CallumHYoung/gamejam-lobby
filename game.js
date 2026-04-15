@@ -100,6 +100,77 @@ scene.add(grid);
 }
 
 // ------------------------------------------------------------------
+// Parkour course
+// ------------------------------------------------------------------
+// One-way AABB platforms rising in a spiral. You can jump up through
+// them from below and land on their top. A wide top pad is left clear
+// as the future home of a "summit" portal.
+
+const parkourPlatforms = [];
+{
+  const cx = 9, cz = 3;
+  const steps = 12;
+  const baseR = 4;
+  for (let i = 0; i < steps; i++) {
+    const angle = (i / steps) * Math.PI * 3;
+    const r = baseR + i * 0.08;
+    parkourPlatforms.push({
+      x: cx + Math.cos(angle) * r,
+      y: 0.6 + i * 1.2,
+      z: cz + Math.sin(angle) * r,
+      sx: Math.max(0.7, 1.15 - i * 0.035),
+      sy: 0.15,
+      sz: Math.max(0.7, 1.15 - i * 0.035),
+    });
+  }
+  // Wide summit pad for the future portal.
+  parkourPlatforms.push({
+    x: cx - 1,
+    y: 0.6 + steps * 1.2,
+    z: cz,
+    sx: 2.2, sy: 0.22, sz: 2.2,
+  });
+
+  const stepMat = new THREE.MeshStandardMaterial({
+    color: 0x331a66,
+    emissive: 0x9a3fff,
+    emissiveIntensity: 0.55,
+    roughness: 0.45,
+    metalness: 0.25,
+  });
+  const summitMat = new THREE.MeshStandardMaterial({
+    color: 0x3a1080,
+    emissive: 0xff4fd8,
+    emissiveIntensity: 0.7,
+    roughness: 0.4,
+    metalness: 0.3,
+  });
+  parkourPlatforms.forEach((p, i) => {
+    const isSummit = i === parkourPlatforms.length - 1;
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(p.sx * 2, p.sy * 2, p.sz * 2),
+      isSummit ? summitMat : stepMat
+    );
+    mesh.position.set(p.x, p.y, p.z);
+    scene.add(mesh);
+  });
+}
+
+function supportHeightAt(x, z, maxY) {
+  let h = 0; // floor
+  for (const p of parkourPlatforms) {
+    if (Math.abs(x - p.x) < p.sx && Math.abs(z - p.z) < p.sz) {
+      const top = p.y + p.sy;
+      if (top <= maxY + 0.05 && top > h) h = top;
+    }
+  }
+  return h;
+}
+
+const GRAVITY = 22;
+const JUMP_IMPULSE = 10;
+
+// ------------------------------------------------------------------
 // Label sprites (name tags, portal titles, chat bubbles)
 // ------------------------------------------------------------------
 
@@ -285,12 +356,18 @@ function setAvatarName(group, name, colorHex) {
   ud.nameTag = tag;
 }
 
-function animateAvatar(group, dt, isMoving) {
+function animateAvatar(group, dt, isMoving, grounded = true) {
   const ud = group.userData;
   ud.animTime += dt;
   const t = ud.animTime;
 
-  if (isMoving) {
+  if (!grounded) {
+    // Airborne: hold pose, no bob.
+    ud.body.position.y = ud.bodyBaseY;
+    const k = Math.min(1, dt * 6);
+    ud.armSwing += (0 - ud.armSwing) * k;
+    ud.legSwing += (0 - ud.legSwing) * k;
+  } else if (isMoving) {
     // Walking: faster swing + bob
     const freq = 9;
     const s = Math.sin(t * freq);
@@ -322,6 +399,8 @@ function animateAvatar(group, dt, isMoving) {
 const player = {
   group: makeAvatar(incoming.color, username),
   pos: new THREE.Vector3(0, 0, 0),
+  velY: 0,
+  grounded: true,
   yaw: 0,
   speed: incoming.speed || 5,
   isMoving: false,
@@ -346,7 +425,10 @@ camera.lookAt(player.pos.clone().add(camLookOffset));
 
 const portals = [];
 
-function makePortal({ title, url, colorHex, position, radius = 1.8 }) {
+const textureLoader = new THREE.TextureLoader();
+textureLoader.setCrossOrigin('anonymous');
+
+function makePortal({ title, url, colorHex, position, radius = 1.8, thumbnailUrl = null }) {
   const group = new THREE.Group();
   group.position.copy(position);
   group.lookAt(new THREE.Vector3(0, position.y, 0));
@@ -384,7 +466,25 @@ function makePortal({ title, url, colorHex, position, radius = 1.8 }) {
   group.add(label);
 
   scene.add(group);
-  portals.push({ group, ring, disk, label, url, title, radius });
+  const entry = { group, ring, disk, label, url, title, radius, thumbLoaded: false };
+  portals.push(entry);
+
+  if (thumbnailUrl) {
+    textureLoader.load(
+      thumbnailUrl,
+      tex => {
+        tex.colorSpace = THREE.SRGBColorSpace;
+        disk.material.map = tex;
+        disk.material.color.set(0xffffff);
+        disk.material.opacity = 0.92;
+        disk.material.needsUpdate = true;
+        entry.thumbLoaded = true;
+      },
+      undefined,
+      err => console.warn('[lobby] thumbnail failed for', title, err)
+    );
+  }
+
   return group;
 }
 
@@ -400,11 +500,16 @@ async function setupPortals() {
     const hue = Math.round((i / n) * 360);
     const color = new THREE.Color(`hsl(${hue}, 85%, 62%)`);
     const colorHex = '#' + color.getHexString();
+    let thumbnailUrl = null;
+    if (g.thumbnail) {
+      try { thumbnailUrl = new URL(g.thumbnail, Portal.REGISTRY_URL).href; } catch {}
+    }
     makePortal({
       title: g.title || g.id || 'mystery game',
       url: g.url,
       colorHex,
       position: new THREE.Vector3(Math.cos(angle) * radius, 2.4, Math.sin(angle) * radius),
+      thumbnailUrl,
     });
   });
 
@@ -449,6 +554,14 @@ addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (k === 'enter' || k === 't') { e.preventDefault(); openChat(); return; }
   if (k === 'n')                   { e.preventDefault(); openNameInput(); return; }
+  if (k === ' ' || k === 'spacebar') {
+    e.preventDefault();
+    if (player.grounded) {
+      player.velY = JUMP_IMPULSE;
+      player.grounded = false;
+    }
+    return;
+  }
   keys[k] = true;
 });
 addEventListener('keyup', e => {
@@ -604,11 +717,13 @@ function broadcastSelf() {
   if (!sendState) return;
   sendState({
     x: player.pos.x,
+    y: player.pos.y,
     z: player.pos.z,
     yaw: player.yaw,
     color: '#' + incoming.color,
     username,
     moving: player.isMoving,
+    grounded: player.grounded,
   });
 }
 
@@ -665,21 +780,25 @@ async function setupMultiplayer() {
         peers.set(peerId, peer);
       }
       const prevRX = peer.state?.renderX ?? data.x ?? 0;
+      const prevRY = peer.state?.renderY ?? data.y ?? 0;
       const prevRZ = peer.state?.renderZ ?? data.z ?? 0;
       const prevName = peer.state?.username;
       peer.state = {
         x: data.x ?? 0,
+        y: data.y ?? 0,
         z: data.z ?? 0,
         yaw: data.yaw ?? 0,
         color: data.color || '#ffffff',
         username: data.username || '?',
         moving: !!data.moving,
+        grounded: data.grounded !== false,
         renderX: prevRX,
+        renderY: prevRY,
         renderZ: prevRZ,
       };
       if (!peer.group) {
         peer.group = makeAvatar(peer.state.color, peer.state.username);
-        peer.group.position.set(peer.state.x, 0, peer.state.z);
+        peer.group.position.set(peer.state.x, peer.state.y, peer.state.z);
         peer.group.rotation.y = peer.state.yaw;
         scene.add(peer.group);
         refreshPeerCount();
@@ -742,14 +861,29 @@ function update(dt) {
     player.yaw += diff * Math.min(1, dt * 12);
   }
 
+  // Vertical physics — gravity + one-way platform collision.
+  player.velY -= GRAVITY * dt;
+  const desiredY = player.pos.y + player.velY * dt;
+  const support = supportHeightAt(player.pos.x, player.pos.z, player.pos.y);
+  if (desiredY <= support) {
+    player.pos.y = support;
+    player.velY = 0;
+    player.grounded = true;
+  } else {
+    player.pos.y = desiredY;
+    player.grounded = false;
+  }
+
   player.group.position.copy(player.pos);
   player.group.rotation.y = player.yaw;
-  animateAvatar(player.group, dt, player.isMoving);
+  animateAvatar(player.group, dt, player.isMoving, player.grounded);
 
   // Portal pulse + trigger
   const t = performance.now() / 1000;
   for (const p of portals) {
-    p.disk.material.opacity = 0.2 + Math.sin(t * 2 + p.group.position.x) * 0.08;
+    if (!p.thumbLoaded) {
+      p.disk.material.opacity = 0.2 + Math.sin(t * 2 + p.group.position.x) * 0.08;
+    }
     p.group.rotation.z = Math.sin(t * 1.2 + p.group.position.z) * 0.04;
   }
 
@@ -774,11 +908,13 @@ function update(dt) {
     if (!peer.state || !peer.group) continue;
     const k = Math.min(1, dt * 12);
     peer.state.renderX += (peer.state.x - peer.state.renderX) * k;
+    peer.state.renderY += (peer.state.y - peer.state.renderY) * k;
     peer.state.renderZ += (peer.state.z - peer.state.renderZ) * k;
     peer.group.position.x = peer.state.renderX;
+    peer.group.position.y = peer.state.renderY;
     peer.group.position.z = peer.state.renderZ;
     peer.group.rotation.y = peer.state.yaw;
-    animateAvatar(peer.group, dt, !!peer.state.moving);
+    animateAvatar(peer.group, dt, !!peer.state.moving, !!peer.state.grounded);
     clearExpiredBubble(peer.group);
   }
   clearExpiredBubble(player.group);
