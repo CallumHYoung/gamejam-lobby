@@ -292,6 +292,8 @@ const parkourPlatforms = [];
 const ducks = [];
 const balls = [];
 const hoops = [];
+const benches = []; // { x, z, yaw, sitY }
+let plane = null;   // { group, prop, basePos, baseYaw, pitch }
 let sendBallAction = null;
 let lastBallBroadcast = 0;
 const PICKUP_RANGE = 1.9;
@@ -837,8 +839,17 @@ function collideBallWithPlayer(ball) {
     planeGrp.add(wR);
 
     planeGrp.position.set(cx - 3, 1.15, cz - 15);
+    planeGrp.rotation.order = 'YXZ';
     planeGrp.rotation.y = Math.PI * 0.08;
     scene.add(planeGrp);
+
+    plane = {
+      group: planeGrp,
+      prop,
+      basePos: planeGrp.position.clone(),
+      baseYaw: planeGrp.rotation.y,
+      pitch: 0,
+    };
   }
 
   // ---------- Park + pond (west, -X) ----------
@@ -905,6 +916,11 @@ function collideBallWithPlayer(ball) {
       grp.position.set(x, 0, z);
       grp.rotation.y = rot;
       scene.add(grp);
+      // Local seat forward is +Z (the bench back sits at local -Z), so the
+      // player yaw that looks away from the back is just `rot`. Seat top is
+      // at y 0.54; body drops 0.45 in the sit pose (body base 0.8 → 0.35),
+      // so anchoring player.pos.y near 0.19 plants the avatar on the seat.
+      benches.push({ x, z, yaw: rot, sitY: 0.19 });
     }
     makeBench(cx + 7, cz + 2, -Math.PI * 0.35);
     makeBench(cx - 8, cz - 3, Math.PI * 0.42);
@@ -1383,8 +1399,119 @@ const player = {
   yaw: 0,
   speed: incoming.speed || 5,
   isMoving: false,
+  seatedBench: null,
+  piloting: false,
 };
 scene.add(player.group);
+
+const SIT_RANGE = 2.2;
+const PLANE_RANGE = 4.5;
+const PLANE_CRUISE = 16;
+const PLANE_BOOST = 30;
+const PLANE_TURN_RATE = 1.0;
+const PLANE_PITCH_RATE = 0.9;
+const PLANE_MIN_Y = 1.5;
+const PLANE_MAX_Y = 60;
+const PLANE_MAX_RADIUS = 240;
+
+function dropHeldBallIfAny() {
+  if (balls.some(b => b.heldLocal)) tryTogglePickup();
+}
+
+function trySitDown() {
+  let best = null;
+  let bestD2 = SIT_RANGE * SIT_RANGE;
+  for (const b of benches) {
+    const dx = player.pos.x - b.x;
+    const dz = player.pos.z - b.z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < bestD2) { bestD2 = d2; best = b; }
+  }
+  if (!best) return false;
+  dropHeldBallIfAny();
+  player.seatedBench = best;
+  player.velY = 0;
+  player.grounded = true;
+  return true;
+}
+
+function standUp() {
+  const b = player.seatedBench;
+  if (!b) return;
+  player.seatedBench = null;
+  // Step off the front of the bench so the player isn't clipping it.
+  const fx = Math.sin(b.yaw);
+  const fz = Math.cos(b.yaw);
+  player.pos.set(b.x + fx * 1.2, 0, b.z + fz * 1.2);
+  player.yaw = b.yaw;
+  player.velY = 0;
+  player.grounded = true;
+  const ud = player.group.userData;
+  ud.emoteName = null;
+  resetEmotePose(ud);
+}
+
+function tryEnterPlane() {
+  if (!plane) return false;
+  const dx = player.pos.x - plane.group.position.x;
+  const dz = player.pos.z - plane.group.position.z;
+  if (dx * dx + dz * dz > PLANE_RANGE * PLANE_RANGE) return false;
+  dropHeldBallIfAny();
+  player.piloting = true;
+  player.group.visible = false;
+  return true;
+}
+
+function exitPlane() {
+  if (!plane) return;
+  player.piloting = false;
+  player.group.visible = true;
+  // Drop the player onto the ground at the plane's XZ so they don't fall from altitude.
+  player.pos.set(plane.group.position.x, 0, plane.group.position.z);
+  player.yaw = plane.group.rotation.y;
+  player.velY = 0;
+  player.grounded = true;
+  // Reset the plane back to its parked pose.
+  plane.group.position.copy(plane.basePos);
+  plane.group.rotation.set(0, plane.baseYaw, 0);
+  plane.pitch = 0;
+}
+
+function updatePlane(dt) {
+  const p = plane;
+  const boosting = !!(keys[' '] || keys['spacebar']);
+  const speed = boosting ? PLANE_BOOST : PLANE_CRUISE;
+
+  if (!isMenuOpen()) {
+    if (keys['a'] || keys['arrowleft'])  p.group.rotation.y += PLANE_TURN_RATE * dt;
+    if (keys['d'] || keys['arrowright']) p.group.rotation.y -= PLANE_TURN_RATE * dt;
+    if (keys['w'] || keys['arrowup'])    p.pitch -= PLANE_PITCH_RATE * dt;
+    if (keys['s'] || keys['arrowdown'])  p.pitch += PLANE_PITCH_RATE * dt;
+  }
+  if (p.pitch >  0.7) p.pitch =  0.7;
+  if (p.pitch < -0.7) p.pitch = -0.7;
+  p.group.rotation.x = p.pitch;
+
+  const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(p.group.quaternion);
+  p.group.position.addScaledVector(fwd, speed * dt);
+
+  if (p.group.position.y < PLANE_MIN_Y) {
+    p.group.position.y = PLANE_MIN_Y;
+    if (p.pitch < 0) p.pitch = 0;
+  }
+  if (p.group.position.y > PLANE_MAX_Y) {
+    p.group.position.y = PLANE_MAX_Y;
+    if (p.pitch > 0) p.pitch = 0;
+  }
+  const r = Math.hypot(p.group.position.x, p.group.position.z);
+  if (r > PLANE_MAX_RADIUS) {
+    const k = PLANE_MAX_RADIUS / r;
+    p.group.position.x *= k;
+    p.group.position.z *= k;
+  }
+
+  p.prop.rotation.z += (boosting ? 60 : 35) * dt;
+}
 
 // Orbit camera — pointer-lock mouse look.
 let camYaw = 0;
@@ -1398,6 +1525,19 @@ const MOUSE_SENS = 0.0028;
 let pointerLocked = false;
 
 function updateCamera(dt) {
+  if (player.piloting && plane) {
+    // Chase camera: sit behind + above the plane, looking at the nose.
+    const back = new THREE.Vector3(0, 2.2, -9).applyQuaternion(plane.group.quaternion);
+    const targetX = plane.group.position.x + back.x;
+    const targetY = plane.group.position.y + back.y;
+    const targetZ = plane.group.position.z + back.z;
+    const k = Math.min(1, dt * 6);
+    camera.position.x += (targetX - camera.position.x) * k;
+    camera.position.y += (targetY - camera.position.y) * k;
+    camera.position.z += (targetZ - camera.position.z) * k;
+    camera.lookAt(plane.group.position.x, plane.group.position.y, plane.group.position.z);
+    return;
+  }
   const horizR = camDistance * Math.cos(camPitch);
   const targetX = player.pos.x + Math.sin(camYaw) * horizR;
   const targetY = player.pos.y + 1.2 + Math.sin(camPitch) * camDistance;
@@ -1592,9 +1732,19 @@ addEventListener('keydown', e => {
   if (k === 'enter' || k === 't') { e.preventDefault(); openChat(); return; }
   if (k === 'n')                   { e.preventDefault(); openNameInput(); return; }
   if (k === 'y')                   { e.preventDefault(); openEmoteWheel(); return; }
-  if (k === 'e')                   { e.preventDefault(); tryTogglePickup(); return; }
-  if (k === ' ' || k === 'spacebar') {
+  if (k === 'e') {
     e.preventDefault();
+    if (player.piloting)          { exitPlane(); return; }
+    if (player.seatedBench)       { standUp(); return; }
+    if (tryEnterPlane())          { return; }
+    if (trySitDown())             { return; }
+    tryTogglePickup();
+    return;
+  }
+  if (k === ' ' || k === 'spacebar') {
+    if (player.piloting) { keys[k] = true; return; } // boost throttle while flying
+    e.preventDefault();
+    if (player.seatedBench) return;
     if (player.grounded) {
       player.velY = JUMP_IMPULSE;
       player.grounded = false;
@@ -1868,6 +2018,8 @@ function broadcastSelf() {
     username,
     moving: player.isMoving,
     grounded: player.grounded,
+    seated: !!player.seatedBench,
+    piloting: !!player.piloting,
   });
 }
 
@@ -1966,6 +2118,8 @@ async function setupMultiplayer() {
         username: data.username || '?',
         moving: !!data.moving,
         grounded: data.grounded !== false,
+        seated: !!data.seated,
+        piloting: !!data.piloting,
         renderX: prevRX,
         renderY: prevRY,
         renderZ: prevRZ,
@@ -1979,6 +2133,7 @@ async function setupMultiplayer() {
       } else if (prevName !== peer.state.username) {
         setAvatarName(peer.group, peer.state.username, peer.state.color);
       }
+      peer.group.visible = !peer.state.piloting;
     });
 
     getC((data, peerId) => handleChat(data, peerId, false));
@@ -2017,52 +2172,34 @@ let redirecting = false;
 let lastBroadcast = 0;
 
 function update(dt) {
-  // Movement is camera-relative: W = toward where the camera looks.
-  let iFwd = 0, iRight = 0;
-  if (!isMenuOpen()) {
-    if (keys['w'] || keys['arrowup'])    iFwd  += 1;
-    if (keys['s'] || keys['arrowdown'])  iFwd  -= 1;
-    if (keys['d'] || keys['arrowright']) iRight += 1;
-    if (keys['a'] || keys['arrowleft'])  iRight -= 1;
-  }
-  player.isMoving = (iFwd !== 0 || iRight !== 0);
-  if (player.isMoving) {
-    // Camera forward on XZ plane (from camera toward player).
-    const fx = -Math.sin(camYaw);
-    const fz = -Math.cos(camYaw);
-    // Right = forward × up = (-fz, 0, fx).
-    const rx = -fz;
-    const rz =  fx;
-    let mx = iFwd * fx + iRight * rx;
-    let mz = iFwd * fz + iRight * rz;
-    const len = Math.hypot(mx, mz);
-    mx /= len; mz /= len;
-
-    resolveHorizontal(mx * player.speed * dt, mz * player.speed * dt);
-
-    const targetYaw = Math.atan2(mx, mz);
-    let diff = targetYaw - player.yaw;
-    while (diff > Math.PI)  diff -= Math.PI * 2;
-    while (diff < -Math.PI) diff += Math.PI * 2;
-    player.yaw += diff * Math.min(1, dt * 12);
-  }
-
-  // Vertical physics — gravity + one-way platform collision.
-  player.velY -= GRAVITY * dt;
-  const desiredY = player.pos.y + player.velY * dt;
-  const support = supportHeightAt(player.pos.x, player.pos.z, player.pos.y);
-  if (desiredY <= support) {
-    player.pos.y = support;
+  // Seated / piloting states short-circuit the normal player physics path.
+  if (player.seatedBench) {
+    const b = player.seatedBench;
+    player.isMoving = false;
+    player.pos.set(b.x, b.sitY, b.z);
+    player.yaw = b.yaw;
+    player.velY = 0;
+    player.grounded = true;
+    player.group.position.copy(player.pos);
+    player.group.rotation.y = player.yaw;
+    const ud = player.group.userData;
+    ud.emoteName = 'sit';
+    ud.emoteStart = performance.now() - 500; // hold mid-pose, never expire
+    animateAvatar(player.group, dt, false, true);
+  } else if (player.piloting) {
+    updatePlane(dt);
+    player.pos.set(
+      plane.group.position.x,
+      plane.group.position.y,
+      plane.group.position.z,
+    );
+    player.yaw = plane.group.rotation.y;
+    player.isMoving = false;
     player.velY = 0;
     player.grounded = true;
   } else {
-    player.pos.y = desiredY;
-    player.grounded = false;
+    updatePlayerMovement(dt);
   }
-
-  player.group.position.copy(player.pos);
-  player.group.rotation.y = player.yaw;
-  animateAvatar(player.group, dt, player.isMoving, player.grounded);
 
   // Balls: held balls attach to the local player (and get broadcast
   // periodically), remotely-held balls just sit at the last received
@@ -2111,7 +2248,7 @@ function update(dt) {
     p.group.rotation.z = Math.sin(t * 1.2 + p.group.position.z) * 0.04;
   }
 
-  if (!redirecting && performance.now() > spawnGraceUntil) {
+  if (!redirecting && !player.piloting && !player.seatedBench && performance.now() > spawnGraceUntil) {
     for (const p of portals) {
       const dx = player.pos.x - p.group.position.x;
       const dz = player.pos.z - p.group.position.z;
@@ -2138,6 +2275,11 @@ function update(dt) {
     peer.group.position.y = peer.state.renderY;
     peer.group.position.z = peer.state.renderZ;
     peer.group.rotation.y = peer.state.yaw;
+    if (peer.state.seated) {
+      const pud = peer.group.userData;
+      pud.emoteName = 'sit';
+      pud.emoteStart = performance.now() - 500;
+    }
     animateAvatar(peer.group, dt, !!peer.state.moving, !!peer.state.grounded);
     clearExpiredBubble(peer.group);
   }
@@ -2148,6 +2290,55 @@ function update(dt) {
     lastBroadcast = now;
     broadcastSelf();
   }
+}
+
+function updatePlayerMovement(dt) {
+  // Movement is camera-relative: W = toward where the camera looks.
+  let iFwd = 0, iRight = 0;
+  if (!isMenuOpen()) {
+    if (keys['w'] || keys['arrowup'])    iFwd  += 1;
+    if (keys['s'] || keys['arrowdown'])  iFwd  -= 1;
+    if (keys['d'] || keys['arrowright']) iRight += 1;
+    if (keys['a'] || keys['arrowleft'])  iRight -= 1;
+  }
+  player.isMoving = (iFwd !== 0 || iRight !== 0);
+  if (player.isMoving) {
+    // Camera forward on XZ plane (from camera toward player).
+    const fx = -Math.sin(camYaw);
+    const fz = -Math.cos(camYaw);
+    // Right = forward × up = (-fz, 0, fx).
+    const rx = -fz;
+    const rz =  fx;
+    let mx = iFwd * fx + iRight * rx;
+    let mz = iFwd * fz + iRight * rz;
+    const len = Math.hypot(mx, mz);
+    mx /= len; mz /= len;
+
+    resolveHorizontal(mx * player.speed * dt, mz * player.speed * dt);
+
+    const targetYaw = Math.atan2(mx, mz);
+    let diff = targetYaw - player.yaw;
+    while (diff > Math.PI)  diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    player.yaw += diff * Math.min(1, dt * 12);
+  }
+
+  // Vertical physics — gravity + one-way platform collision.
+  player.velY -= GRAVITY * dt;
+  const desiredY = player.pos.y + player.velY * dt;
+  const support = supportHeightAt(player.pos.x, player.pos.z, player.pos.y);
+  if (desiredY <= support) {
+    player.pos.y = support;
+    player.velY = 0;
+    player.grounded = true;
+  } else {
+    player.pos.y = desiredY;
+    player.grounded = false;
+  }
+
+  player.group.position.copy(player.pos);
+  player.group.rotation.y = player.yaw;
+  animateAvatar(player.group, dt, player.isMoving, player.grounded);
 }
 
 function loop() {
