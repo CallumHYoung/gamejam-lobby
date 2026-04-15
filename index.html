@@ -3,16 +3,21 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>My Ordinary Game Jam Game</title>
+<title>The Lobby — Ordinary Game Jam</title>
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+<canvas id="game"></canvas>
+
 <div id="hud">
   <div id="username">loading…</div>
-  <div id="peers">1 online</div>
-  <div id="hint">WASD / arrows to move — walk into a portal to travel</div>
+  <div id="peers">1 in lobby</div>
+  <div id="hint">WASD / arrows to move — walk into a portal to travel — press <kbd>T</kbd> or <kbd>Enter</kbd> to chat</div>
 </div>
-<canvas id="game" width="960" height="540"></canvas>
+
+<div id="chat-log" aria-live="polite"></div>
+<input id="chat-input" type="text" maxlength="140" autocomplete="off" placeholder="say something… (enter to send, esc to cancel)" />
+
 <script src="portal.js"></script>
 <script type="module" src="game.js"></script>
 </body>
