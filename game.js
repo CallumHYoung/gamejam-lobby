@@ -281,6 +281,31 @@ const parkourPlatforms = [];
     mesh.position.set(p.x, p.y, p.z);
     scene.add(mesh);
   });
+
+  // Time trial pads — start at the base near the first step, end on
+  // the summit pad. Visual rings are flat glowing discs; detection
+  // lives in the main loop.
+  const summit = parkourPlatforms[parkourPlatforms.length - 1];
+  parkour.startPad = { x: 15.5, z: 3.5, r: 1.4 };
+  parkour.endPad   = { x: summit.x, z: summit.z, y: summit.y + summit.sy + 0.02, r: 1.2 };
+
+  const startRing = new THREE.Mesh(
+    new THREE.RingGeometry(parkour.startPad.r * 0.75, parkour.startPad.r, 48),
+    new THREE.MeshBasicMaterial({ color: 0x4ff0ff, side: THREE.DoubleSide, transparent: true, opacity: 0.9 })
+  );
+  startRing.rotation.x = -Math.PI / 2;
+  startRing.position.set(parkour.startPad.x, 0.04, parkour.startPad.z);
+  scene.add(startRing);
+  parkour.startRing = startRing;
+
+  const endRing = new THREE.Mesh(
+    new THREE.RingGeometry(parkour.endPad.r * 0.72, parkour.endPad.r, 48),
+    new THREE.MeshBasicMaterial({ color: 0xff4fd8, side: THREE.DoubleSide, transparent: true, opacity: 0.9 })
+  );
+  endRing.rotation.x = -Math.PI / 2;
+  endRing.position.set(parkour.endPad.x, parkour.endPad.y, parkour.endPad.z);
+  scene.add(endRing);
+  parkour.endRing = endRing;
 }
 
 // ------------------------------------------------------------------
@@ -294,6 +319,47 @@ const balls = [];
 const hoops = [];
 const benches = []; // { x, z, yaw, sitY }
 let plane = null;   // { group, prop, basePos, baseYaw, pitch }
+
+// Scoring — ball sports. Two soccer goal rectangles (x bounds, y bounds,
+// z plane, which side counts as "in") plus the basketball hoops array.
+const soccerGoals = [];
+const scores = { soccer: 0, basketball: 0 };
+try {
+  const raw = localStorage.getItem('lobby:scores');
+  if (raw) Object.assign(scores, JSON.parse(raw));
+} catch {}
+function saveScores() {
+  try { localStorage.setItem('lobby:scores', JSON.stringify(scores)); } catch {}
+}
+
+// Parkour time trial state. Start/end pads are populated alongside
+// the spiral and the timer is driven from the main loop.
+const parkour = {
+  startPad: null, // { x, z, r }
+  endPad: null,   // { x, y, z, r }
+  running: false,
+  startMs: 0,
+  currentMs: 0,
+  bestMs: null,
+  onStart: false,
+  onEnd: false,
+};
+try {
+  const raw = localStorage.getItem('lobby:parkourBest');
+  if (raw) parkour.bestMs = parseInt(raw, 10) || null;
+} catch {}
+function saveParkourBest() {
+  try { localStorage.setItem('lobby:parkourBest', String(parkour.bestMs ?? '')); } catch {}
+}
+
+function formatTime(ms) {
+  if (ms == null) return '--:--';
+  const total = Math.max(0, ms);
+  const m = Math.floor(total / 60000);
+  const s = Math.floor((total % 60000) / 1000);
+  const cs = Math.floor((total % 1000) / 10);
+  return `${m}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+}
 let sendBallAction = null;
 let lastBallBroadcast = 0;
 const PICKUP_RANGE = 1.9;
@@ -317,11 +383,13 @@ function makeBall({ id, radius, color, roughness = 0.5, emissive = 0x000000, emi
     radius,
     mesh,
     pos: spawn.clone(),
+    prev: spawn.clone(), // previous-frame pos for swept scoring detection
     vel: new THREE.Vector3(),
     home: spawn.clone(),
     pickupable,
     heldLocal: false,
     holderPeerId: null,
+    scoredUntil: 0,
   };
   balls.push(ball);
   return ball;
@@ -441,6 +509,7 @@ function shootHeldBall() {
 }
 
 function updateBall(ball, dt) {
+  ball.prev.copy(ball.pos);
   ball.vel.y -= BALL_GRAVITY * dt;
   ball.pos.x += ball.vel.x * dt;
   ball.pos.y += ball.vel.y * dt;
@@ -485,6 +554,70 @@ function updateBall(ball, dt) {
       ball.mesh.rotateOnWorldAxis(axis, angle);
     }
   }
+
+  checkScoreEvents(ball);
+}
+
+function checkScoreEvents(ball) {
+  const now = performance.now();
+  if (ball.scoredUntil && now < ball.scoredUntil) return;
+  // Swept-position detection — large teleports (broadcasts, respawns)
+  // can straddle a goal plane spuriously, so skip jumps > 4m.
+  const dx = ball.pos.x - ball.prev.x;
+  const dy = ball.pos.y - ball.prev.y;
+  const dz = ball.pos.z - ball.prev.z;
+  if (dx * dx + dy * dy + dz * dz > 16) return;
+
+  if (ball.id === 'soccer') {
+    for (const g of soccerGoals) {
+      const crossing = (ball.prev.z - g.z) * (ball.pos.z - g.z);
+      if (crossing > 0) continue;
+      // Only count shots from the playing-field side of the goal line.
+      if (g.fromSide * (ball.prev.z - g.z) <= 0) continue;
+      const t = Math.abs(ball.prev.z - g.z) /
+                Math.max(0.0001, Math.abs(ball.pos.z - ball.prev.z));
+      const cx = ball.prev.x + t * dx;
+      const cy = ball.prev.y + t * dy;
+      if (cx < g.xMin || cx > g.xMax) continue;
+      if (cy < 0 || cy > g.yMax) continue;
+      registerScore(ball, 'soccer', 'GOAL!');
+      return;
+    }
+  } else if (ball.id === 'basketball') {
+    for (const h of hoops) {
+      const rimY = h.pos.y;
+      if (!(ball.prev.y > rimY && ball.pos.y <= rimY)) continue;
+      const t = (ball.prev.y - rimY) / Math.max(0.0001, ball.prev.y - ball.pos.y);
+      const cx = ball.prev.x + t * dx;
+      const cz = ball.prev.z + t * dz;
+      const rdx = cx - h.pos.x;
+      const rdz = cz - h.pos.z;
+      const limit = (h.radius - ball.radius * 0.6);
+      if (rdx * rdx + rdz * rdz > limit * limit) continue;
+      // Require a downward motion — otherwise catching the rim from
+      // below while dribbling under it would false-trigger.
+      if (ball.vel.y > -0.5) continue;
+      registerScore(ball, 'basketball', 'BASKET!');
+      return;
+    }
+  }
+}
+
+function registerScore(ball, kind, label) {
+  ball.scoredUntil = performance.now() + 1500;
+  scores[kind] = (scores[kind] || 0) + 1;
+  saveScores();
+  updateScoresHUD();
+  showToast(label);
+  // Let the ball finish its trajectory for the visual cheer, then
+  // gently respawn it at its home spawn point.
+  setTimeout(() => {
+    ball.pos.copy(ball.home);
+    ball.vel.set(0, 0, 0);
+    ball.prev.copy(ball.home);
+    ball.scoredUntil = 0;
+    broadcastBall(ball);
+  }, 1400);
 }
 
 function collideBallWithPlayer(ball) {
@@ -627,6 +760,17 @@ function collideBallWithPlayer(ball) {
     }
     makeGoal(cz - 11.2);
     makeGoal(cz + 11.2);
+
+    // Goal rectangles for scoring: +fromSide means the ball enters
+    // from the +Z side (i.e. from the playing field), so the north
+    // goal (cz - 11.2) counts shots coming from larger z, and the
+    // south goal (cz + 11.2) counts shots coming from smaller z.
+    soccerGoals.push({
+      z: cz - 11.2, xMin: cx - 3.2, xMax: cx + 3.2, yMax: 2.2, fromSide: +1,
+    });
+    soccerGoals.push({
+      z: cz + 11.2, xMin: cx - 3.2, xMax: cx + 3.2, yMax: 2.2, fromSide: -1,
+    });
 
     makeBall({
       id: 'soccer',
@@ -2024,6 +2168,91 @@ function setPeerStatus(text, isError = false) {
 function refreshPeerCount() {
   setPeerStatus(`${peers.size + 1} in lobby`);
 }
+
+const scoreSoccerEl = document.getElementById('score-soccer');
+const scoreBasketEl = document.getElementById('score-basket');
+const parkourBestEl = document.getElementById('parkour-best');
+const parkourCurrentEl = document.getElementById('parkour-current');
+const toastEl = document.getElementById('toast');
+let toastHideTimer = 0;
+
+function updateScoresHUD() {
+  if (scoreSoccerEl) scoreSoccerEl.textContent = String(scores.soccer || 0);
+  if (scoreBasketEl) scoreBasketEl.textContent = String(scores.basketball || 0);
+  if (parkourBestEl) parkourBestEl.textContent = formatTime(parkour.bestMs);
+}
+
+function showToast(text) {
+  if (!toastEl) return;
+  toastEl.textContent = text;
+  toastEl.classList.add('show');
+  clearTimeout(toastHideTimer);
+  toastHideTimer = setTimeout(() => toastEl.classList.remove('show'), 1400);
+}
+
+function updateParkourHUD() {
+  if (!parkourCurrentEl) return;
+  if (parkour.running) {
+    parkourCurrentEl.hidden = false;
+    parkourCurrentEl.textContent = '· ' + formatTime(parkour.currentMs);
+  } else {
+    parkourCurrentEl.hidden = true;
+  }
+}
+
+function updateParkour(dt) {
+  if (!parkour.startPad || !parkour.endPad) return;
+  // Flying or sitting shouldn't register parkour checkpoints.
+  if (player.piloting || player.seatedBench) {
+    parkour.onStart = false;
+    parkour.onEnd = false;
+    updateParkourHUD();
+    return;
+  }
+  const sp = parkour.startPad;
+  const ep = parkour.endPad;
+  const sdx = player.pos.x - sp.x;
+  const sdz = player.pos.z - sp.z;
+  const onStart = (sdx * sdx + sdz * sdz) < (sp.r * sp.r) && player.pos.y < 1.5;
+  const edx = player.pos.x - ep.x;
+  const edz = player.pos.z - ep.z;
+  const onEnd = (edx * edx + edz * edz) < (ep.r * ep.r) && player.pos.y > ep.y - 1.2;
+
+  // Edge-triggered: fire only on first frame of entry.
+  if (onStart && !parkour.onStart) {
+    parkour.running = true;
+    parkour.startMs = performance.now();
+    parkour.currentMs = 0;
+    showToast('GO!');
+  }
+  if (onEnd && !parkour.onEnd && parkour.running) {
+    parkour.running = false;
+    const finalMs = performance.now() - parkour.startMs;
+    parkour.currentMs = finalMs;
+    if (parkour.bestMs == null || finalMs < parkour.bestMs) {
+      parkour.bestMs = Math.round(finalMs);
+      saveParkourBest();
+      showToast('NEW BEST — ' + formatTime(parkour.bestMs));
+    } else {
+      showToast('FINISH — ' + formatTime(finalMs));
+    }
+    updateScoresHUD();
+  }
+  parkour.onStart = onStart;
+  parkour.onEnd = onEnd;
+
+  if (parkour.running) {
+    parkour.currentMs = performance.now() - parkour.startMs;
+  }
+  updateParkourHUD();
+
+  // Gentle pulse on the rings so the pads read as interactive.
+  const t = performance.now() / 1000;
+  if (parkour.startRing) parkour.startRing.material.opacity = 0.55 + Math.sin(t * 3) * 0.25;
+  if (parkour.endRing)   parkour.endRing.material.opacity   = 0.55 + Math.sin(t * 3 + 1.2) * 0.25;
+}
+
+updateScoresHUD();
 function broadcastSelf() {
   if (!sendState) return;
   const payload = {
@@ -2284,6 +2513,8 @@ function update(dt) {
       if (ball.heldLocal) broadcastBall(ball);
     }
   }
+
+  updateParkour(dt);
 
   // Ducks drift around the pond.
   const nowS = performance.now() / 1000;

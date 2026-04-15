@@ -18,6 +18,16 @@
   <div id="hint">click to look · WASD move · <kbd>Space</kbd> jump · <kbd>E</kbd> pick up · sit · fly · click to shoot · <kbd>T</kbd>/<kbd>Enter</kbd> chat · <kbd>Y</kbd> emote · <kbd>N</kbd> rename · scroll zoom</div>
 </div>
 
+<div id="scores">
+  <span class="score-item">⚽ <span id="score-soccer">0</span></span>
+  <span class="score-item">🏀 <span id="score-basket">0</span></span>
+  <span class="score-item" id="parkour-block">
+    🏁 <span id="parkour-best">--:--</span>
+    <span id="parkour-current" hidden></span>
+  </span>
+</div>
+<div id="toast" aria-live="polite"></div>
+
 <div id="chat-log" aria-live="polite"></div>
 <input id="chat-input" type="text" maxlength="140" autocomplete="off" placeholder="say something… (enter to send, esc to cancel)" />
 <input id="name-input" type="text" maxlength="24" autocomplete="off" placeholder="your name… (enter to confirm, esc to cancel)" />
