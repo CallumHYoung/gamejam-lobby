@@ -233,6 +233,37 @@ scene.add(grid);
 // them from below and land on their top. A wide top pad is left clear
 // as the future home of a "summit" portal.
 
+// Parkour time trial state. Start/end pads are populated inside the
+// spiral-build block below and the timer is driven from the main loop.
+const parkour = {
+  startPad: null, // { x, z, r }
+  endPad: null,   // { x, y, z, r }
+  startRing: null,
+  endRing: null,
+  running: false,
+  startMs: 0,
+  currentMs: 0,
+  bestMs: null,
+  onStart: false,
+  onEnd: false,
+};
+try {
+  const raw = localStorage.getItem('lobby:parkourBest');
+  if (raw) parkour.bestMs = parseInt(raw, 10) || null;
+} catch {}
+function saveParkourBest() {
+  try { localStorage.setItem('lobby:parkourBest', String(parkour.bestMs ?? '')); } catch {}
+}
+
+function formatTime(ms) {
+  if (ms == null) return '--:--';
+  const total = Math.max(0, ms);
+  const m = Math.floor(total / 60000);
+  const s = Math.floor((total % 60000) / 1000);
+  const cs = Math.floor((total % 1000) / 10);
+  return `${m}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+}
+
 const parkourPlatforms = [];
 {
   const cx = 9, cz = 3;
@@ -332,34 +363,6 @@ function saveScores() {
   try { localStorage.setItem('lobby:scores', JSON.stringify(scores)); } catch {}
 }
 
-// Parkour time trial state. Start/end pads are populated alongside
-// the spiral and the timer is driven from the main loop.
-const parkour = {
-  startPad: null, // { x, z, r }
-  endPad: null,   // { x, y, z, r }
-  running: false,
-  startMs: 0,
-  currentMs: 0,
-  bestMs: null,
-  onStart: false,
-  onEnd: false,
-};
-try {
-  const raw = localStorage.getItem('lobby:parkourBest');
-  if (raw) parkour.bestMs = parseInt(raw, 10) || null;
-} catch {}
-function saveParkourBest() {
-  try { localStorage.setItem('lobby:parkourBest', String(parkour.bestMs ?? '')); } catch {}
-}
-
-function formatTime(ms) {
-  if (ms == null) return '--:--';
-  const total = Math.max(0, ms);
-  const m = Math.floor(total / 60000);
-  const s = Math.floor((total % 60000) / 1000);
-  const cs = Math.floor((total % 1000) / 10);
-  return `${m}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
-}
 let sendBallAction = null;
 let lastBallBroadcast = 0;
 const PICKUP_RANGE = 1.9;
