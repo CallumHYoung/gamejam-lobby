@@ -291,7 +291,10 @@ const parkourPlatforms = [];
 
 const ducks = [];
 const balls = [];
+const hoops = [];
 let sendBallAction = null;
+let lastBallBroadcast = 0;
+const PICKUP_RANGE = 1.9;
 
 const BALL_GRAVITY = 22;
 const BALL_BOUNCE = 0.55;
@@ -300,7 +303,7 @@ const BALL_AIR_DRAG = 0.92;
 const BALL_REST_EPS = 0.2;
 const BALL_MAX_DRIFT = 45;
 
-function makeBall({ id, radius, color, roughness = 0.5, emissive = 0x000000, emissiveIntensity = 0, spawn }) {
+function makeBall({ id, radius, color, roughness = 0.5, emissive = 0x000000, emissiveIntensity = 0, spawn, pickupable = false }) {
   const mesh = new THREE.Mesh(
     new THREE.SphereGeometry(radius, 24, 18),
     new THREE.MeshStandardMaterial({ color, roughness, emissive, emissiveIntensity })
@@ -314,6 +317,9 @@ function makeBall({ id, radius, color, roughness = 0.5, emissive = 0x000000, emi
     pos: spawn.clone(),
     vel: new THREE.Vector3(),
     home: spawn.clone(),
+    pickupable,
+    heldLocal: false,
+    holderPeerId: null,
   };
   balls.push(ball);
   return ball;
@@ -325,7 +331,111 @@ function broadcastBall(ball) {
     id: ball.id,
     x: ball.pos.x, y: ball.pos.y, z: ball.pos.z,
     vx: ball.vel.x, vy: ball.vel.y, vz: ball.vel.z,
+    held: !!ball.heldLocal,
   });
+}
+
+function updateHeldBall(ball, dt) {
+  // Position the ball at the player's right hip, with a dribble bob
+  // when walking and a gentle idle bob when stationary.
+  const cosY = Math.cos(player.yaw);
+  const sinY = Math.sin(player.yaw);
+  // Player's "right" direction: (cos yaw, 0, -sin yaw).
+  const rx = cosY;
+  const rz = -sinY;
+  const now = performance.now();
+
+  let offY;
+  if (player.isMoving) {
+    // Smooth |sin| gives a bouncing envelope like a dribble.
+    const phase = now * 0.014;
+    offY = 0.35 + 0.55 * Math.abs(Math.sin(phase));
+  } else {
+    offY = 0.95 + Math.sin(now * 0.004) * 0.025;
+  }
+
+  ball.pos.x = player.pos.x + rx * 0.55;
+  ball.pos.y = player.pos.y + offY;
+  ball.pos.z = player.pos.z + rz * 0.55;
+  ball.mesh.position.copy(ball.pos);
+  ball.mesh.rotation.x += dt * 5;
+  ball.mesh.rotation.y += dt * 1.5;
+}
+
+function tryTogglePickup() {
+  // If currently holding a ball, drop it at player's feet.
+  const held = balls.find(b => b.heldLocal);
+  if (held) {
+    held.heldLocal = false;
+    held.holderPeerId = null;
+    const cosY = Math.cos(player.yaw);
+    const sinY = Math.sin(player.yaw);
+    held.pos.x = player.pos.x + Math.sin(player.yaw) * 0.8;
+    held.pos.y = player.pos.y + held.radius + 0.1;
+    held.pos.z = player.pos.z + Math.cos(player.yaw) * 0.8;
+    held.vel.set(0, 0, 0);
+    broadcastBall(held);
+    return;
+  }
+
+  // Otherwise try to pick up the nearest pickupable free ball in range.
+  let best = null;
+  let bestD2 = PICKUP_RANGE * PICKUP_RANGE;
+  for (const ball of balls) {
+    if (!ball.pickupable) continue;
+    if (ball.holderPeerId) continue;
+    const dx = player.pos.x - ball.pos.x;
+    const dy = (player.pos.y + 0.9) - ball.pos.y;
+    const dz = player.pos.z - ball.pos.z;
+    const d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 < bestD2) { bestD2 = d2; best = ball; }
+  }
+  if (!best) return;
+  best.heldLocal = true;
+  best.holderPeerId = 'local';
+  best.vel.set(0, 0, 0);
+  broadcastBall(best);
+}
+
+function shootHeldBall() {
+  const ball = balls.find(b => b.heldLocal);
+  if (!ball || hoops.length === 0) return;
+
+  // Autoaim: prefer the hoop the player is facing, lightly penalize distance.
+  const fwdX = -Math.sin(camYaw);
+  const fwdZ = -Math.cos(camYaw);
+  let target = null;
+  let bestScore = -Infinity;
+  for (const h of hoops) {
+    const dx = h.pos.x - player.pos.x;
+    const dz = h.pos.z - player.pos.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 0.001) continue;
+    const dot = (fwdX * dx + fwdZ * dz) / dist;
+    const score = dot - dist * 0.01;
+    if (score > bestScore) { bestScore = score; target = h; }
+  }
+  if (!target) return;
+
+  // Projectile arc: solve for initial velocity given a fixed flight time.
+  const sx = player.pos.x;
+  const sy = player.pos.y + 1.35;
+  const sz = player.pos.z;
+  const tx = target.pos.x;
+  const ty = target.pos.y;
+  const tz = target.pos.z;
+
+  const horiz = Math.hypot(tx - sx, tz - sz);
+  const T = Math.max(0.7, Math.min(1.5, 0.45 + horiz * 0.09));
+  const vx = (tx - sx) / T;
+  const vz = (tz - sz) / T;
+  const vy = (ty - sy + 0.5 * BALL_GRAVITY * T * T) / T;
+
+  ball.heldLocal = false;
+  ball.holderPeerId = null;
+  ball.pos.set(sx, sy, sz);
+  ball.vel.set(vx, vy, vz);
+  broadcastBall(ball);
 }
 
 function updateBall(ball, dt) {
@@ -564,28 +674,43 @@ function collideBallWithPlayer(ball) {
     const rimMat = new THREE.MeshStandardMaterial({
       color: 0xff5a00, emissive: 0xff5a00, emissiveIntensity: 0.9,
     });
-    function makeHoop(hx, facing) {
+    function makeHoop(hx, facingX) {
+      // facingX = +1 means the hoop face points toward +X (so its backboard
+      // sits on the -X side). Used by the left hoop. facingX = -1 for right.
+      const grp = new THREE.Group();
+      grp.position.set(hx, 0, cz);
+
       const pole = new THREE.Mesh(
         new THREE.CylinderGeometry(0.13, 0.13, 3.8, 12),
         poleMat
       );
-      pole.position.set(hx, 1.9, cz);
-      scene.add(pole);
+      pole.position.y = 1.9;
+      grp.add(pole);
 
+      // Backboard: thin along X so its 2×1.3 face is perpendicular to X,
+      // which means it faces the court center.
       const board = new THREE.Mesh(
-        new THREE.BoxGeometry(2, 1.3, 0.08),
+        new THREE.BoxGeometry(0.08, 1.3, 2),
         boardMat
       );
-      board.position.set(hx - facing * 0.15, 3.5, cz);
-      scene.add(board);
+      board.position.set(-facingX * 0.15, 3.5, 0);
+      grp.add(board);
 
+      // Rim stays horizontal; positioned in front of the board on the
+      // facingX side so it hangs over the court.
       const rim = new THREE.Mesh(
         new THREE.TorusGeometry(0.48, 0.05, 12, 32),
         rimMat
       );
       rim.rotation.x = Math.PI / 2;
-      rim.position.set(hx - facing * 0.65, 3.2, cz);
-      scene.add(rim);
+      rim.position.set(facingX * 0.5, 3.2, 0);
+      grp.add(rim);
+
+      scene.add(grp);
+      hoops.push({
+        pos: new THREE.Vector3(hx + facingX * 0.5, 3.2, cz),
+        radius: 0.48,
+      });
     }
     makeHoop(cx - 7.2,  1);
     makeHoop(cx + 7.2, -1);
@@ -598,6 +723,7 @@ function collideBallWithPlayer(ball) {
       emissive: 0x7a2a00,
       emissiveIntensity: 0.15,
       spawn: new THREE.Vector3(cx - 2.5, 0.29, cz + 0.8),
+      pickupable: true,
     });
   }
 
@@ -1460,6 +1586,7 @@ addEventListener('keydown', e => {
   if (k === 'enter' || k === 't') { e.preventDefault(); openChat(); return; }
   if (k === 'n')                   { e.preventDefault(); openNameInput(); return; }
   if (k === 'y')                   { e.preventDefault(); openEmoteWheel(); return; }
+  if (k === 'e')                   { e.preventDefault(); tryTogglePickup(); return; }
   if (k === ' ' || k === 'spacebar') {
     e.preventDefault();
     if (player.grounded) {
@@ -1502,6 +1629,16 @@ canvas.addEventListener('wheel', e => {
   if (camDistance < CAM_DISTANCE_MIN) camDistance = CAM_DISTANCE_MIN;
   if (camDistance > CAM_DISTANCE_MAX) camDistance = CAM_DISTANCE_MAX;
 }, { passive: false });
+
+// Left click while pointer-locked shoots if we're holding a ball.
+// (The "click to lock" flow is on canvas click, fires on mouseup so it
+// doesn't race with this mousedown path.)
+document.addEventListener('mousedown', e => {
+  if (!pointerLocked || isMenuOpen()) return;
+  if (e.button !== 0) return;
+  const held = balls.find(b => b.heldLocal);
+  if (held) shootHeldBall();
+});
 
 function releasePointerLock() {
   if (document.pointerLockElement === canvas) document.exitPointerLock();
@@ -1765,12 +1902,22 @@ async function setupMultiplayer() {
     sendEmote = sendE;
     sendBallAction = sendB;
 
-    getB(data => {
+    getB((data, peerId) => {
       if (!data || !data.id) return;
       const ball = balls.find(b => b.id === data.id);
       if (!ball) return;
       ball.pos.set(data.x, data.y, data.z);
-      ball.vel.set(data.vx, data.vy, data.vz);
+      if (data.held) {
+        // Remote peer is holding this ball — yield if we thought we had it.
+        ball.heldLocal = false;
+        ball.holderPeerId = peerId;
+        ball.vel.set(0, 0, 0);
+      } else {
+        ball.vel.set(data.vx || 0, data.vy || 0, data.vz || 0);
+        ball.holderPeerId = null;
+        // If this update comes from a remote peer shooting, we stop holding.
+        if (peerId) ball.heldLocal = false;
+      }
     });
 
     room.onPeerJoin(id => {
@@ -1782,6 +1929,14 @@ async function setupMultiplayer() {
       const p = peers.get(id);
       if (p?.group) scene.remove(p.group);
       peers.delete(id);
+      // Free any ball the departed peer was holding so it isn't stuck.
+      for (const ball of balls) {
+        if (ball.holderPeerId === id) {
+          ball.holderPeerId = null;
+          ball.pos.copy(ball.home);
+          ball.vel.set(0, 0, 0);
+        }
+      }
       refreshPeerCount();
     });
 
@@ -1903,12 +2058,24 @@ function update(dt) {
   player.group.rotation.y = player.yaw;
   animateAvatar(player.group, dt, player.isMoving, player.grounded);
 
-  // Balls: collision with local player (produces impulse + broadcast)
-  // then physics integration. Remote kicks arrive via the "ball" action
-  // and snap the ball to the received state.
+  // Balls: held balls attach to the local player (and get broadcast
+  // periodically), remotely-held balls just sit at the last received
+  // position, and free balls run full physics + collision.
   for (const ball of balls) {
-    collideBallWithPlayer(ball);
-    updateBall(ball, dt);
+    if (ball.heldLocal) {
+      updateHeldBall(ball, dt);
+    } else if (ball.holderPeerId) {
+      ball.mesh.position.copy(ball.pos);
+    } else {
+      collideBallWithPlayer(ball);
+      updateBall(ball, dt);
+    }
+  }
+  if (performance.now() - lastBallBroadcast > 100) {
+    lastBallBroadcast = performance.now();
+    for (const ball of balls) {
+      if (ball.heldLocal) broadcastBall(ball);
+    }
   }
 
   // Ducks drift around the pond.
