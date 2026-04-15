@@ -339,6 +339,8 @@ function makeAvatar(colorHex, name) {
     bodyBaseY: 0.8,
     bubble: null,
     bubbleExpires: 0,
+    emoteName: null,
+    emoteStart: 0,
   };
   return group;
 }
@@ -356,10 +358,163 @@ function setAvatarName(group, name, colorHex) {
   ud.nameTag = tag;
 }
 
+// ------------------------------------------------------------------
+// Emotes
+// ------------------------------------------------------------------
+// Each emote.apply(ud, t) directly sets pose fields. We call return
+// after apply so the normal animation path doesn't overwrite them.
+// On cancel (timeout / movement / jump) we zero the extra rotation.z
+// so the limbs snap cleanly back into the normal anim envelope.
+
+const EMOTES = {
+  wave: {
+    label: 'Wave', icon: '👋', duration: 2.6,
+    apply(ud, t) {
+      ud.rightArm.rotation.x = -2.9;
+      ud.rightArm.rotation.y = Math.sin(t * 7) * 0.45;
+      ud.rightArm.rotation.z = 0;
+      ud.leftArm.rotation.x = 0;
+      ud.leftArm.rotation.y = 0;
+      ud.leftArm.rotation.z = 0;
+      ud.leftLeg.rotation.x = 0;
+      ud.rightLeg.rotation.x = 0;
+      ud.body.position.y = ud.bodyBaseY + Math.sin(t * 3) * 0.03;
+    },
+  },
+  dance: {
+    label: 'Dance', icon: '🕺', duration: 4.2,
+    apply(ud, t) {
+      const s = Math.sin(t * 6);
+      const c = Math.cos(t * 6);
+      ud.leftArm.rotation.x = -1.1 + s * 0.8;
+      ud.rightArm.rotation.x = -1.1 - s * 0.8;
+      ud.leftArm.rotation.z = 0.4 + c * 0.2;
+      ud.rightArm.rotation.z = -0.4 - c * 0.2;
+      ud.leftArm.rotation.y = 0;
+      ud.rightArm.rotation.y = 0;
+      ud.leftLeg.rotation.x = s * 0.45;
+      ud.rightLeg.rotation.x = -s * 0.45;
+      ud.body.position.y = ud.bodyBaseY + Math.abs(s) * 0.12;
+    },
+  },
+  point: {
+    label: 'Point', icon: '👉', duration: 2.2,
+    apply(ud, t) {
+      const lift = Math.min(1, t * 6);
+      ud.rightArm.rotation.x = -Math.PI / 2 * lift;
+      ud.rightArm.rotation.y = 0;
+      ud.rightArm.rotation.z = 0;
+      ud.leftArm.rotation.x = 0;
+      ud.leftArm.rotation.y = 0;
+      ud.leftArm.rotation.z = 0;
+      ud.leftLeg.rotation.x = 0;
+      ud.rightLeg.rotation.x = 0;
+      ud.body.position.y = ud.bodyBaseY;
+    },
+  },
+  shrug: {
+    label: 'Shrug', icon: '🤷', duration: 2.2,
+    apply(ud, t) {
+      const lift = Math.min(1, t * 5) * 0.75;
+      ud.leftArm.rotation.x = -0.25;
+      ud.rightArm.rotation.x = -0.25;
+      ud.leftArm.rotation.z = lift;
+      ud.rightArm.rotation.z = -lift;
+      ud.leftArm.rotation.y = 0;
+      ud.rightArm.rotation.y = 0;
+      ud.leftLeg.rotation.x = 0;
+      ud.rightLeg.rotation.x = 0;
+      ud.body.position.y = ud.bodyBaseY - lift * 0.06;
+    },
+  },
+  cheer: {
+    label: 'Cheer', icon: '🙌', duration: 2.8,
+    apply(ud, t) {
+      const s = Math.abs(Math.sin(t * 7));
+      ud.leftArm.rotation.x = -2.8;
+      ud.rightArm.rotation.x = -2.8;
+      ud.leftArm.rotation.z = 0.3 + s * 0.25;
+      ud.rightArm.rotation.z = -0.3 - s * 0.25;
+      ud.leftArm.rotation.y = 0;
+      ud.rightArm.rotation.y = 0;
+      ud.leftLeg.rotation.x = 0;
+      ud.rightLeg.rotation.x = 0;
+      ud.body.position.y = ud.bodyBaseY + s * 0.14;
+    },
+  },
+  laugh: {
+    label: 'Laugh', icon: '😆', duration: 2.4,
+    apply(ud, t) {
+      const s = Math.sin(t * 14);
+      ud.body.position.y = ud.bodyBaseY + Math.abs(s) * 0.09;
+      ud.leftArm.rotation.x = -0.4 + s * 0.2;
+      ud.rightArm.rotation.x = -0.4 - s * 0.2;
+      ud.leftArm.rotation.z = 0.2;
+      ud.rightArm.rotation.z = -0.2;
+      ud.leftArm.rotation.y = 0;
+      ud.rightArm.rotation.y = 0;
+      ud.leftLeg.rotation.x = 0;
+      ud.rightLeg.rotation.x = 0;
+    },
+  },
+  sit: {
+    label: 'Sit', icon: '🪑', duration: 5,
+    apply(ud, t) {
+      const drop = Math.min(1, t * 4) * 0.45;
+      ud.body.position.y = ud.bodyBaseY - drop;
+      ud.leftLeg.rotation.x = -Math.PI / 2 * Math.min(1, t * 3);
+      ud.rightLeg.rotation.x = -Math.PI / 2 * Math.min(1, t * 3);
+      ud.leftArm.rotation.x = 0;
+      ud.rightArm.rotation.x = 0;
+      ud.leftArm.rotation.z = 0.2;
+      ud.rightArm.rotation.z = -0.2;
+      ud.leftArm.rotation.y = 0;
+      ud.rightArm.rotation.y = 0;
+    },
+  },
+  sleep: {
+    label: 'Sleep', icon: '💤', duration: 5,
+    apply(ud, t) {
+      const drop = Math.min(1, t * 3) * 0.55;
+      ud.body.position.y = ud.bodyBaseY - drop + Math.sin(t * 2) * 0.02;
+      ud.leftLeg.rotation.x = -0.4;
+      ud.rightLeg.rotation.x = -0.4;
+      ud.leftArm.rotation.x = -0.2;
+      ud.rightArm.rotation.x = -0.2;
+      ud.leftArm.rotation.z = 0.5;
+      ud.rightArm.rotation.z = -0.5;
+      ud.leftArm.rotation.y = 0;
+      ud.rightArm.rotation.y = 0;
+    },
+  },
+};
+
+function resetEmotePose(ud) {
+  ud.leftArm.rotation.z = 0;
+  ud.rightArm.rotation.z = 0;
+  ud.leftArm.rotation.y = 0;
+  ud.rightArm.rotation.y = 0;
+  ud.armSwing = 0;
+  ud.legSwing = 0;
+}
+
 function animateAvatar(group, dt, isMoving, grounded = true) {
   const ud = group.userData;
   ud.animTime += dt;
   const t = ud.animTime;
+
+  // Emote playback overrides normal animation.
+  if (ud.emoteName) {
+    const emote = EMOTES[ud.emoteName];
+    const elapsed = (performance.now() - ud.emoteStart) / 1000;
+    const cancel = !emote || elapsed >= emote.duration || isMoving || !grounded;
+    if (!cancel) {
+      emote.apply(ud, elapsed);
+      return;
+    }
+    ud.emoteName = null;
+    resetEmotePose(ud);
+  }
 
   if (!grounded) {
     // Airborne: hold pose, no bob.
@@ -543,17 +698,39 @@ const nameInput = document.getElementById('name-input');
 const renameBtn = document.getElementById('rename-btn');
 const chatLog = document.getElementById('chat-log');
 const usernameText = document.getElementById('username-text');
+const emoteWheel = document.getElementById('emote-wheel');
+let wheelOpen = false;
 
 function isInputFocused() {
   const a = document.activeElement;
   return a === chatInput || a === nameInput;
 }
+function isMenuOpen() {
+  return isInputFocused() || wheelOpen;
+}
 
 addEventListener('keydown', e => {
   if (isInputFocused()) return;
   const k = e.key.toLowerCase();
+
+  if (wheelOpen) {
+    if (k === 'escape' || k === 'y') { e.preventDefault(); closeEmoteWheel(); return; }
+    if (k >= '1' && k <= '9') {
+      const idx = parseInt(k, 10) - 1;
+      const names = Object.keys(EMOTES);
+      if (idx < names.length) {
+        e.preventDefault();
+        playEmote(names[idx]);
+        closeEmoteWheel();
+      }
+      return;
+    }
+    return;
+  }
+
   if (k === 'enter' || k === 't') { e.preventDefault(); openChat(); return; }
   if (k === 'n')                   { e.preventDefault(); openNameInput(); return; }
+  if (k === 'y')                   { e.preventDefault(); openEmoteWheel(); return; }
   if (k === ' ' || k === 'spacebar') {
     e.preventDefault();
     if (player.grounded) {
@@ -565,7 +742,7 @@ addEventListener('keydown', e => {
   keys[k] = true;
 });
 addEventListener('keyup', e => {
-  if (isInputFocused()) return;
+  if (isMenuOpen()) return;
   keys[e.key.toLowerCase()] = false;
 });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
@@ -690,6 +867,66 @@ nameInput.addEventListener('keydown', e => {
 });
 renameBtn.addEventListener('click', () => openNameInput());
 
+// ------------------------------------------------------------------
+// Emote wheel UI
+// ------------------------------------------------------------------
+
+function buildEmoteWheel() {
+  const names = Object.keys(EMOTES);
+  const count = names.length;
+  const radius = 130;
+
+  const center = document.createElement('div');
+  center.className = 'emote-wheel-center';
+  center.innerHTML =
+    '<div class="emote-wheel-title">Emotes</div>' +
+    '<div class="emote-wheel-hint">1&ndash;' + count + ' or click<br>Y or Esc to close</div>';
+  emoteWheel.appendChild(center);
+
+  names.forEach((name, i) => {
+    const em = EMOTES[name];
+    const angle = (i / count) * Math.PI * 2 - Math.PI / 2;
+    const slot = document.createElement('button');
+    slot.className = 'emote-slot';
+    slot.type = 'button';
+    slot.style.left = `calc(50% + ${Math.cos(angle) * radius}px)`;
+    slot.style.top  = `calc(50% + ${Math.sin(angle) * radius}px)`;
+    slot.innerHTML =
+      `<span class="emote-slot-index">${i + 1}</span>` +
+      `<span class="emote-icon">${em.icon}</span>` +
+      `<span class="emote-label">${em.label}</span>`;
+    slot.addEventListener('click', ev => {
+      ev.stopPropagation();
+      playEmote(name);
+      closeEmoteWheel();
+    });
+    emoteWheel.appendChild(slot);
+  });
+
+  emoteWheel.addEventListener('click', ev => {
+    if (ev.target === emoteWheel) closeEmoteWheel();
+  });
+}
+buildEmoteWheel();
+
+function openEmoteWheel() {
+  wheelOpen = true;
+  for (const k in keys) keys[k] = false;
+  emoteWheel.hidden = false;
+}
+function closeEmoteWheel() {
+  wheelOpen = false;
+  emoteWheel.hidden = true;
+}
+
+function playEmote(name) {
+  if (!EMOTES[name]) return;
+  const ud = player.group.userData;
+  ud.emoteName = name;
+  ud.emoteStart = performance.now();
+  if (sendEmote) sendEmote({ name });
+}
+
 // Auto-prompt once on true first visit (no URL param, no saved name)
 if (firstVisit) {
   setTimeout(openNameInput, 600);
@@ -703,6 +940,7 @@ const peers = new Map(); // peerId -> { state, group }
 const peerCountEl = document.getElementById('peers');
 let sendState = null;
 let sendChat = null;
+let sendEmote = null;
 let room = null;
 
 function setPeerStatus(text, isError = false) {
@@ -757,8 +995,10 @@ async function setupMultiplayer() {
     room = joinRoom({ appId: 'ordinary-game-jam-lobby' }, 'lobby-main');
     const [sendS, getS] = room.makeAction('state');
     const [sendC, getC] = room.makeAction('chat');
+    const [sendE, getE] = room.makeAction('emote');
     sendState = sendS;
     sendChat = sendC;
+    sendEmote = sendE;
 
     room.onPeerJoin(id => {
       if (!peers.has(id)) peers.set(id, { state: null, group: null });
@@ -809,6 +1049,15 @@ async function setupMultiplayer() {
 
     getC((data, peerId) => handleChat(data, peerId, false));
 
+    getE((data, peerId) => {
+      if (!data || !data.name || !EMOTES[data.name]) return;
+      const peer = peers.get(peerId);
+      if (peer?.group) {
+        peer.group.userData.emoteName = data.name;
+        peer.group.userData.emoteStart = performance.now();
+      }
+    });
+
     refreshPeerCount();
     broadcastSelf();
     console.log('[lobby] multiplayer ready');
@@ -835,9 +1084,9 @@ let lastBroadcast = 0;
 const MAX_RADIUS = 24;
 
 function update(dt) {
-  // Movement (locked out while an input is focused)
+  // Movement (locked out while chat/name/emote-wheel is open)
   let mx = 0, mz = 0;
-  if (!isInputFocused()) {
+  if (!isMenuOpen()) {
     if (keys['w'] || keys['arrowup'])    mz -= 1;
     if (keys['s'] || keys['arrowdown'])  mz += 1;
     if (keys['a'] || keys['arrowleft'])  mx -= 1;
