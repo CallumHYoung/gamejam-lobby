@@ -46,7 +46,7 @@ renderer.setSize(innerWidth, innerHeight, false);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#0a0514');
-scene.fog = new THREE.Fog('#0a0514', 28, 75);
+scene.fog = new THREE.Fog('#0a0514', 45, 170);
 
 const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 300);
 
@@ -156,6 +156,386 @@ const parkourPlatforms = [];
   });
 }
 
+// ------------------------------------------------------------------
+// Outer world — four themed decoration sectors around the lobby
+// ------------------------------------------------------------------
+// Kept purely visual for this pass. The pillar ring stays as the
+// boundary between the "indoor" lobby and the grass outside.
+
+const ducks = [];
+
+{
+  // Grass ground extends well beyond the lobby floor.
+  const grass = new THREE.Mesh(
+    new THREE.CircleGeometry(82, 72),
+    new THREE.MeshStandardMaterial({ color: 0x1b3a1a, roughness: 0.95 })
+  );
+  grass.rotation.x = -Math.PI / 2;
+  grass.position.y = -0.01;
+  scene.add(grass);
+
+  const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
+  // ---------- Soccer pitch (north, -Z) ----------
+  {
+    const cx = 0, cz = -48;
+    const pitch = new THREE.Mesh(
+      new THREE.PlaneGeometry(32, 22),
+      new THREE.MeshStandardMaterial({ color: 0x2c6030, roughness: 0.85 })
+    );
+    pitch.rotation.x = -Math.PI / 2;
+    pitch.position.set(cx, 0.02, cz);
+    scene.add(pitch);
+
+    const border = new THREE.Mesh(
+      new THREE.RingGeometry(0, 0, 0), // placeholder
+      lineMat
+    );
+    // Actual perimeter via four thin planes
+    const makeLine = (w, h, x, z) => {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), lineMat);
+      m.rotation.x = -Math.PI / 2;
+      m.position.set(cx + x, 0.03, cz + z);
+      scene.add(m);
+    };
+    makeLine(32, 0.25, 0, -11);    // top
+    makeLine(32, 0.25, 0,  11);    // bottom
+    makeLine(0.25, 22, -16, 0);    // left
+    makeLine(0.25, 22,  16, 0);    // right
+    makeLine(0.25, 22, 0, 0);      // center line
+
+    const centerCircle = new THREE.Mesh(
+      new THREE.RingGeometry(2.8, 3.0, 64),
+      lineMat
+    );
+    centerCircle.rotation.x = -Math.PI / 2;
+    centerCircle.position.set(cx, 0.03, cz);
+    scene.add(centerCircle);
+
+    const goalMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff, emissive: 0xaaaaff, emissiveIntensity: 0.25,
+      roughness: 0.4, metalness: 0.6,
+    });
+    const postGeom = new THREE.CylinderGeometry(0.1, 0.1, 2.2, 12);
+    const barGeom  = new THREE.CylinderGeometry(0.1, 0.1, 6.4, 12);
+    function makeGoal(gz) {
+      const W = 6.4, H = 2.2;
+      const left  = new THREE.Mesh(postGeom, goalMat);
+      left.position.set(cx - W / 2, H / 2, gz);
+      scene.add(left);
+      const right = new THREE.Mesh(postGeom, goalMat);
+      right.position.set(cx + W / 2, H / 2, gz);
+      scene.add(right);
+      const top = new THREE.Mesh(barGeom, goalMat);
+      top.rotation.z = Math.PI / 2;
+      top.position.set(cx, H, gz);
+      scene.add(top);
+    }
+    makeGoal(cz - 11.2);
+    makeGoal(cz + 11.2);
+
+    const ball = new THREE.Mesh(
+      new THREE.SphereGeometry(0.32, 20, 16),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.45 })
+    );
+    ball.position.set(cx, 0.32, cz);
+    scene.add(ball);
+  }
+
+  // ---------- Basketball court (east, +X) ----------
+  {
+    const cx = 48, cz = 0;
+    const court = new THREE.Mesh(
+      new THREE.PlaneGeometry(16, 11),
+      new THREE.MeshStandardMaterial({ color: 0x7a4418, roughness: 0.75 })
+    );
+    court.rotation.x = -Math.PI / 2;
+    court.position.set(cx, 0.02, cz);
+    scene.add(court);
+
+    const courtLine = (w, h, dx, dz) => {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), lineMat);
+      m.rotation.x = -Math.PI / 2;
+      m.position.set(cx + dx, 0.03, cz + dz);
+      scene.add(m);
+    };
+    courtLine(16, 0.2, 0, -5.5);
+    courtLine(16, 0.2, 0,  5.5);
+    courtLine(0.2, 11, -8, 0);
+    courtLine(0.2, 11,  8, 0);
+    courtLine(0.2, 11,  0, 0); // half line
+
+    // Center circle
+    const centerRing = new THREE.Mesh(
+      new THREE.RingGeometry(1.4, 1.55, 48),
+      lineMat
+    );
+    centerRing.rotation.x = -Math.PI / 2;
+    centerRing.position.set(cx, 0.03, cz);
+    scene.add(centerRing);
+
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.8 });
+    const boardMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.08, roughness: 0.5,
+    });
+    const rimMat = new THREE.MeshStandardMaterial({
+      color: 0xff5a00, emissive: 0xff5a00, emissiveIntensity: 0.9,
+    });
+    function makeHoop(hx, facing) {
+      const pole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.13, 0.13, 3.8, 12),
+        poleMat
+      );
+      pole.position.set(hx, 1.9, cz);
+      scene.add(pole);
+
+      const board = new THREE.Mesh(
+        new THREE.BoxGeometry(2, 1.3, 0.08),
+        boardMat
+      );
+      board.position.set(hx - facing * 0.15, 3.5, cz);
+      scene.add(board);
+
+      const rim = new THREE.Mesh(
+        new THREE.TorusGeometry(0.48, 0.05, 12, 32),
+        rimMat
+      );
+      rim.rotation.x = Math.PI / 2;
+      rim.position.set(hx - facing * 0.65, 3.2, cz);
+      scene.add(rim);
+    }
+    makeHoop(cx - 7.2,  1);
+    makeHoop(cx + 7.2, -1);
+
+    const bball = new THREE.Mesh(
+      new THREE.SphereGeometry(0.29, 20, 16),
+      new THREE.MeshStandardMaterial({
+        color: 0xd85a1a, roughness: 0.6,
+        emissive: 0x7a2a00, emissiveIntensity: 0.15,
+      })
+    );
+    bball.position.set(cx - 2.5, 0.29, cz + 0.8);
+    scene.add(bball);
+  }
+
+  // ---------- Airfield (south, +Z) ----------
+  {
+    const cx = 0, cz = 50;
+    const runway = new THREE.Mesh(
+      new THREE.PlaneGeometry(7, 42),
+      new THREE.MeshStandardMaterial({ color: 0x282828, roughness: 0.85 })
+    );
+    runway.rotation.x = -Math.PI / 2;
+    runway.position.set(cx, 0.02, cz);
+    scene.add(runway);
+
+    for (let i = -18; i <= 18; i += 4) {
+      const dash = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.35, 2),
+        lineMat
+      );
+      dash.rotation.x = -Math.PI / 2;
+      dash.position.set(cx, 0.03, cz + i);
+      scene.add(dash);
+    }
+
+    const planeGrp = new THREE.Group();
+    const bodyMat = new THREE.MeshStandardMaterial({
+      color: 0xd4d4dc, metalness: 0.7, roughness: 0.3,
+    });
+    const accentMat = new THREE.MeshStandardMaterial({
+      color: 0xff3a3a, emissive: 0xff3a3a, emissiveIntensity: 0.25,
+    });
+    const glassMat = new THREE.MeshStandardMaterial({
+      color: 0x88d7ff, transparent: true, opacity: 0.55,
+      metalness: 0.5, roughness: 0.15,
+    });
+
+    const fuselage = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.5, 0.35, 6.2, 16),
+      bodyMat
+    );
+    fuselage.rotation.x = Math.PI / 2;
+    planeGrp.add(fuselage);
+
+    const nose = new THREE.Mesh(
+      new THREE.ConeGeometry(0.5, 1, 16),
+      bodyMat
+    );
+    nose.rotation.x = Math.PI / 2;
+    nose.position.set(0, 0, 3.6);
+    planeGrp.add(nose);
+
+    const cockpit = new THREE.Mesh(
+      new THREE.SphereGeometry(0.45, 14, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+      glassMat
+    );
+    cockpit.position.set(0, 0.45, 0.8);
+    planeGrp.add(cockpit);
+
+    const wings = new THREE.Mesh(
+      new THREE.BoxGeometry(7.2, 0.12, 1.5),
+      bodyMat
+    );
+    wings.position.y = 0.05;
+    planeGrp.add(wings);
+
+    const stripe = new THREE.Mesh(
+      new THREE.BoxGeometry(7.25, 0.13, 0.3),
+      accentMat
+    );
+    stripe.position.y = 0.06;
+    planeGrp.add(stripe);
+
+    const tailV = new THREE.Mesh(
+      new THREE.BoxGeometry(0.1, 1, 1.1),
+      bodyMat
+    );
+    tailV.position.set(0, 0.55, -2.8);
+    planeGrp.add(tailV);
+
+    const tailH = new THREE.Mesh(
+      new THREE.BoxGeometry(2.2, 0.08, 0.8),
+      bodyMat
+    );
+    tailH.position.set(0, 0.12, -2.85);
+    planeGrp.add(tailH);
+
+    const prop = new THREE.Mesh(
+      new THREE.BoxGeometry(1.8, 0.09, 0.06),
+      new THREE.MeshStandardMaterial({ color: 0x1a1a1a })
+    );
+    prop.position.set(0, 0, 4.15);
+    planeGrp.add(prop);
+
+    // Landing gear stubs so the plane sits above the runway
+    const gearMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
+    const gearL = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.6, 8), gearMat);
+    gearL.position.set(-1.6, -0.55, 0);
+    planeGrp.add(gearL);
+    const gearR = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.6, 8), gearMat);
+    gearR.position.set(1.6, -0.55, 0);
+    planeGrp.add(gearR);
+    const wheelGeom = new THREE.CylinderGeometry(0.25, 0.25, 0.15, 14);
+    const wheelMat  = new THREE.MeshStandardMaterial({ color: 0x111111 });
+    const wL = new THREE.Mesh(wheelGeom, wheelMat);
+    wL.rotation.z = Math.PI / 2;
+    wL.position.set(-1.6, -0.9, 0);
+    planeGrp.add(wL);
+    const wR = new THREE.Mesh(wheelGeom, wheelMat);
+    wR.rotation.z = Math.PI / 2;
+    wR.position.set(1.6, -0.9, 0);
+    planeGrp.add(wR);
+
+    planeGrp.position.set(cx - 3, 1.15, cz - 15);
+    planeGrp.rotation.y = Math.PI * 0.08;
+    scene.add(planeGrp);
+  }
+
+  // ---------- Park + pond (west, -X) ----------
+  {
+    const cx = -48, cz = 0;
+
+    const patch = new THREE.Mesh(
+      new THREE.CircleGeometry(15, 48),
+      new THREE.MeshStandardMaterial({ color: 0x2e6126, roughness: 0.92 })
+    );
+    patch.rotation.x = -Math.PI / 2;
+    patch.position.set(cx, 0.02, cz);
+    scene.add(patch);
+
+    const pond = new THREE.Mesh(
+      new THREE.CircleGeometry(5.5, 56),
+      new THREE.MeshStandardMaterial({
+        color: 0x2f7ec8, emissive: 0x1b55a0, emissiveIntensity: 0.35,
+        roughness: 0.2, metalness: 0.3,
+      })
+    );
+    pond.rotation.x = -Math.PI / 2;
+    pond.position.set(cx, 0.05, cz);
+    scene.add(pond);
+
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4b2a14, roughness: 0.9 });
+    const leafMat  = new THREE.MeshStandardMaterial({
+      color: 0x2a7a32, emissive: 0x164020, emissiveIntensity: 0.18, roughness: 0.85,
+    });
+    const trunkGeom = new THREE.CylinderGeometry(0.15, 0.22, 1.9, 10);
+    const leafGeom  = new THREE.ConeGeometry(1, 2.4, 12);
+    function makeTree(x, z) {
+      const grp = new THREE.Group();
+      const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+      trunk.position.y = 0.95;
+      grp.add(trunk);
+      const leaves = new THREE.Mesh(leafGeom, leafMat);
+      leaves.position.y = 2.6;
+      grp.add(leaves);
+      grp.position.set(x, 0, z);
+      scene.add(grp);
+    }
+    makeTree(cx - 9, cz - 8);
+    makeTree(cx + 10, cz - 6);
+    makeTree(cx - 7, cz + 10);
+    makeTree(cx + 9, cz + 9);
+    makeTree(cx + 1, cz - 13);
+
+    const benchMat = new THREE.MeshStandardMaterial({ color: 0x5a3a14, roughness: 0.85 });
+    function makeBench(x, z, rot = 0) {
+      const grp = new THREE.Group();
+      const seat = new THREE.Mesh(new THREE.BoxGeometry(2, 0.12, 0.55), benchMat);
+      seat.position.y = 0.48;
+      grp.add(seat);
+      const back = new THREE.Mesh(new THREE.BoxGeometry(2, 0.7, 0.08), benchMat);
+      back.position.set(0, 0.88, -0.24);
+      grp.add(back);
+      const legL = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.5, 0.55), benchMat);
+      legL.position.set(-0.88, 0.24, 0);
+      grp.add(legL);
+      const legR = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.5, 0.55), benchMat);
+      legR.position.set(0.88, 0.24, 0);
+      grp.add(legR);
+      grp.position.set(x, 0, z);
+      grp.rotation.y = rot;
+      scene.add(grp);
+    }
+    makeBench(cx + 7, cz + 2, -Math.PI * 0.35);
+    makeBench(cx - 8, cz - 3, Math.PI * 0.42);
+    makeBench(cx + 2, cz - 8, Math.PI);
+
+    const duckBodyMat = new THREE.MeshStandardMaterial({ color: 0xf2efe2, roughness: 0.7 });
+    const duckHeadMat = new THREE.MeshStandardMaterial({ color: 0x2a5a30, roughness: 0.6 });
+    const beakMat     = new THREE.MeshStandardMaterial({ color: 0xffaa22 });
+    const duckBodyGeom = new THREE.SphereGeometry(0.22, 14, 10);
+    const duckHeadGeom = new THREE.SphereGeometry(0.14, 12, 10);
+    const beakGeom     = new THREE.ConeGeometry(0.05, 0.12, 8);
+    for (let i = 0; i < 6; i++) {
+      const grp = new THREE.Group();
+      const body = new THREE.Mesh(duckBodyGeom, duckBodyMat);
+      body.scale.set(1.35, 0.85, 1);
+      grp.add(body);
+      const head = new THREE.Mesh(duckHeadGeom, duckHeadMat);
+      head.position.set(0.22, 0.16, 0);
+      grp.add(head);
+      const beak = new THREE.Mesh(beakGeom, beakMat);
+      beak.rotation.z = -Math.PI / 2;
+      beak.position.set(0.34, 0.14, 0);
+      grp.add(beak);
+
+      const angle = (i / 6) * Math.PI * 2 + Math.random() * 0.3;
+      const r = 1.8 + Math.random() * 2.6;
+      grp.position.set(cx + Math.cos(angle) * r, 0.38, cz + Math.sin(angle) * r);
+      scene.add(grp);
+      ducks.push({
+        group: grp,
+        cx, cz,
+        angle,
+        radius: r,
+        speed: 0.1 + Math.random() * 0.1,
+        bobPhase: Math.random() * Math.PI * 2,
+      });
+    }
+  }
+}
+
 const PLAYER_RADIUS = 0.4;
 const PLAYER_HEIGHT = 1.6;
 const COL_EPS = 0.05;
@@ -190,7 +570,7 @@ function collidesAt(x, y, z) {
 
 const GRAVITY = 22;
 const JUMP_IMPULSE = 10;
-const MAX_RADIUS = 24;
+const MAX_RADIUS = 72;
 
 function resolveHorizontal(dx, dz) {
   const tryX = player.pos.x + dx;
@@ -1229,6 +1609,24 @@ function update(dt) {
   player.group.position.copy(player.pos);
   player.group.rotation.y = player.yaw;
   animateAvatar(player.group, dt, player.isMoving, player.grounded);
+
+  // Ducks drift around the pond.
+  const nowS = performance.now() / 1000;
+  for (const d of ducks) {
+    const prevX = d.group.position.x;
+    const prevZ = d.group.position.z;
+    d.angle += d.speed * dt;
+    const nx = d.cx + Math.cos(d.angle) * d.radius;
+    const nz = d.cz + Math.sin(d.angle) * d.radius;
+    d.group.position.x = nx;
+    d.group.position.z = nz;
+    d.group.position.y = 0.38 + Math.sin(nowS * 1.6 + d.bobPhase) * 0.035;
+    const dx = nx - prevX;
+    const dz = nz - prevZ;
+    if (dx * dx + dz * dz > 1e-6) {
+      d.group.rotation.y = Math.atan2(-dz, dx);
+    }
+  }
 
   // Portal pulse + trigger
   const t = performance.now() / 1000;
