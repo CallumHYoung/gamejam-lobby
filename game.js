@@ -163,6 +163,115 @@ const parkourPlatforms = [];
 // boundary between the "indoor" lobby and the grass outside.
 
 const ducks = [];
+const balls = [];
+let sendBallAction = null;
+
+const BALL_GRAVITY = 22;
+const BALL_BOUNCE = 0.55;
+const BALL_GROUND_FRICTION = 0.35;
+const BALL_AIR_DRAG = 0.92;
+const BALL_REST_EPS = 0.2;
+const BALL_MAX_DRIFT = 45;
+
+function makeBall({ id, radius, color, roughness = 0.5, emissive = 0x000000, emissiveIntensity = 0, spawn }) {
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(radius, 24, 18),
+    new THREE.MeshStandardMaterial({ color, roughness, emissive, emissiveIntensity })
+  );
+  mesh.position.copy(spawn);
+  scene.add(mesh);
+  const ball = {
+    id,
+    radius,
+    mesh,
+    pos: spawn.clone(),
+    vel: new THREE.Vector3(),
+    home: spawn.clone(),
+  };
+  balls.push(ball);
+  return ball;
+}
+
+function broadcastBall(ball) {
+  if (!sendBallAction) return;
+  sendBallAction({
+    id: ball.id,
+    x: ball.pos.x, y: ball.pos.y, z: ball.pos.z,
+    vx: ball.vel.x, vy: ball.vel.y, vz: ball.vel.z,
+  });
+}
+
+function updateBall(ball, dt) {
+  ball.vel.y -= BALL_GRAVITY * dt;
+  ball.pos.x += ball.vel.x * dt;
+  ball.pos.y += ball.vel.y * dt;
+  ball.pos.z += ball.vel.z * dt;
+
+  if (ball.pos.y < ball.radius) {
+    ball.pos.y = ball.radius;
+    if (ball.vel.y < 0) ball.vel.y = -ball.vel.y * BALL_BOUNCE;
+    if (Math.abs(ball.vel.y) < 0.3) ball.vel.y = 0;
+    const f = Math.pow(BALL_GROUND_FRICTION, dt);
+    ball.vel.x *= f;
+    ball.vel.z *= f;
+  } else {
+    const f = Math.pow(BALL_AIR_DRAG, dt);
+    ball.vel.x *= f;
+    ball.vel.z *= f;
+  }
+
+  const speedH = Math.hypot(ball.vel.x, ball.vel.z);
+  if (speedH < BALL_REST_EPS && ball.pos.y <= ball.radius + 0.02 && Math.abs(ball.vel.y) < 0.05) {
+    ball.vel.set(0, 0, 0);
+  }
+
+  const dxH = ball.pos.x - ball.home.x;
+  const dzH = ball.pos.z - ball.home.z;
+  if (dxH * dxH + dzH * dzH > BALL_MAX_DRIFT * BALL_MAX_DRIFT || ball.pos.y < -8) {
+    ball.pos.copy(ball.home);
+    ball.vel.set(0, 0, 0);
+    broadcastBall(ball);
+  }
+
+  ball.mesh.position.copy(ball.pos);
+
+  // Rolling visual: rotate around the axis perpendicular to horizontal velocity.
+  const moveSpeed = ball.vel.length();
+  if (moveSpeed > 0.01) {
+    const axis = new THREE.Vector3(ball.vel.z, 0, -ball.vel.x);
+    const axisLen = axis.length();
+    if (axisLen > 0.0001) {
+      axis.divideScalar(axisLen);
+      const angle = (speedH * dt) / ball.radius;
+      ball.mesh.rotateOnWorldAxis(axis, angle);
+    }
+  }
+}
+
+function collideBallWithPlayer(ball) {
+  const dx = player.pos.x - ball.pos.x;
+  const dz = player.pos.z - ball.pos.z;
+  const d2 = dx * dx + dz * dz;
+  const minDist = PLAYER_RADIUS + ball.radius;
+  if (d2 >= minDist * minDist) return;
+  if (ball.pos.y + ball.radius < player.pos.y - 0.05) return;
+  if (ball.pos.y - ball.radius > player.pos.y + PLAYER_HEIGHT) return;
+
+  const d = Math.sqrt(Math.max(d2, 0.0001));
+  const nx = -dx / d; // from player toward ball
+  const nz = -dz / d;
+  const playerSpeed = player.isMoving ? player.speed : 0;
+  const kickStrength = 3.5 + playerSpeed * 2;
+
+  ball.vel.x = nx * kickStrength;
+  ball.vel.z = nz * kickStrength;
+  ball.vel.y = Math.max(ball.vel.y, 3.8);
+
+  ball.pos.x = player.pos.x + nx * minDist * 1.05;
+  ball.pos.z = player.pos.z + nz * minDist * 1.05;
+
+  broadcastBall(ball);
+}
 
 {
   // Grass ground extends well beyond the lobby floor.
@@ -234,12 +343,13 @@ const ducks = [];
     makeGoal(cz - 11.2);
     makeGoal(cz + 11.2);
 
-    const ball = new THREE.Mesh(
-      new THREE.SphereGeometry(0.32, 20, 16),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.45 })
-    );
-    ball.position.set(cx, 0.32, cz);
-    scene.add(ball);
+    makeBall({
+      id: 'soccer',
+      radius: 0.32,
+      color: 0xffffff,
+      roughness: 0.45,
+      spawn: new THREE.Vector3(cx, 0.32, cz),
+    });
   }
 
   // ---------- Basketball court (east, +X) ----------
@@ -307,15 +417,15 @@ const ducks = [];
     makeHoop(cx - 7.2,  1);
     makeHoop(cx + 7.2, -1);
 
-    const bball = new THREE.Mesh(
-      new THREE.SphereGeometry(0.29, 20, 16),
-      new THREE.MeshStandardMaterial({
-        color: 0xd85a1a, roughness: 0.6,
-        emissive: 0x7a2a00, emissiveIntensity: 0.15,
-      })
-    );
-    bball.position.set(cx - 2.5, 0.29, cz + 0.8);
-    scene.add(bball);
+    makeBall({
+      id: 'basketball',
+      radius: 0.29,
+      color: 0xd85a1a,
+      roughness: 0.6,
+      emissive: 0x7a2a00,
+      emissiveIntensity: 0.15,
+      spawn: new THREE.Vector3(cx - 2.5, 0.29, cz + 0.8),
+    });
   }
 
   // ---------- Airfield (south, +Z) ----------
@@ -1476,9 +1586,19 @@ async function setupMultiplayer() {
     const [sendS, getS] = room.makeAction('state');
     const [sendC, getC] = room.makeAction('chat');
     const [sendE, getE] = room.makeAction('emote');
+    const [sendB, getB] = room.makeAction('ball');
     sendState = sendS;
     sendChat = sendC;
     sendEmote = sendE;
+    sendBallAction = sendB;
+
+    getB(data => {
+      if (!data || !data.id) return;
+      const ball = balls.find(b => b.id === data.id);
+      if (!ball) return;
+      ball.pos.set(data.x, data.y, data.z);
+      ball.vel.set(data.vx, data.vy, data.vz);
+    });
 
     room.onPeerJoin(id => {
       if (!peers.has(id)) peers.set(id, { state: null, group: null });
@@ -1609,6 +1729,14 @@ function update(dt) {
   player.group.position.copy(player.pos);
   player.group.rotation.y = player.yaw;
   animateAvatar(player.group, dt, player.isMoving, player.grounded);
+
+  // Balls: collision with local player (produces impulse + broadcast)
+  // then physics integration. Remote kicks arrive via the "ball" action
+  // and snap the ball to the received state.
+  for (const ball of balls) {
+    collideBallWithPlayer(ball);
+    updateBall(ball, dt);
+  }
 
   // Ducks drift around the pond.
   const nowS = performance.now() / 1000;
