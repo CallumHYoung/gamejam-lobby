@@ -2204,6 +2204,40 @@ function updateParkourHUD() {
   }
 }
 
+const leaderboardRowsEl = document.getElementById('leaderboard-rows');
+function renderLeaderboard() {
+  if (!leaderboardRowsEl) return;
+  const rows = [{
+    name: username || '?',
+    ms: parkour.bestMs,
+    self: true,
+  }];
+  for (const peer of peers.values()) {
+    if (!peer.state) continue;
+    rows.push({
+      name: peer.state.username || '?',
+      ms: typeof peer.state.parkourBest === 'number' ? peer.state.parkourBest : null,
+      self: false,
+    });
+  }
+  rows.sort((a, b) => {
+    const am = a.ms == null ? Infinity : a.ms;
+    const bm = b.ms == null ? Infinity : b.ms;
+    return am - bm;
+  });
+  const top = rows.slice(0, 5);
+  if (top.every(r => r.ms == null)) {
+    leaderboardRowsEl.innerHTML = '<div class="lb-empty">no runs yet</div>';
+    return;
+  }
+  leaderboardRowsEl.innerHTML = top.map(r => {
+    const selfCls = r.self ? ' self' : '';
+    const name = escapeHtml(r.name || '?');
+    const time = r.ms == null ? '—' : formatTime(r.ms);
+    return `<div class="lb-row${selfCls}"><span class="lb-name">${name}</span><span class="lb-time">${time}</span></div>`;
+  }).join('');
+}
+
 function updateParkour(dt) {
   if (!parkour.startPad || !parkour.endPad) return;
   // Flying or sitting shouldn't register parkour checkpoints.
@@ -2237,6 +2271,10 @@ function updateParkour(dt) {
       parkour.bestMs = Math.round(finalMs);
       saveParkourBest();
       showToast('NEW BEST — ' + formatTime(parkour.bestMs));
+      // Push a fresh broadcast so the rest of the lobby sees the new
+      // best without waiting for the next 80ms tick, then redraw.
+      broadcastSelf();
+      renderLeaderboard();
     } else {
       showToast('FINISH — ' + formatTime(finalMs));
     }
@@ -2257,6 +2295,7 @@ function updateParkour(dt) {
 }
 
 updateScoresHUD();
+renderLeaderboard();
 
 // Background music — loops quietly, mute via M or the button.
 // Browser autoplay rules need a user gesture, so we also kick the
@@ -2318,6 +2357,7 @@ function broadcastSelf() {
     grounded: player.grounded,
     seated: !!player.seatedBench,
     piloting: !!player.piloting,
+    parkourBest: parkour.bestMs,
   };
   // Only the current pilot broadcasts plane pose. On exit we still
   // send one final frame (piloting=false) carrying the reset base
@@ -2430,6 +2470,7 @@ async function setupMultiplayer() {
         grounded: data.grounded !== false,
         seated: !!data.seated,
         piloting: !!data.piloting,
+        parkourBest: typeof data.parkourBest === 'number' ? data.parkourBest : null,
         renderX: prevRX,
         renderY: prevRY,
         renderZ: prevRZ,
@@ -2495,6 +2536,7 @@ addEventListener('beforeunload', () => {
 const clock = new THREE.Clock();
 let redirecting = false;
 let lastBroadcast = 0;
+let lastLeaderboardRender = 0;
 
 function update(dt) {
   // Seated / piloting states short-circuit the normal player physics path.
@@ -2636,6 +2678,10 @@ function update(dt) {
   if (now - lastBroadcast > 80) {
     lastBroadcast = now;
     broadcastSelf();
+  }
+  if (now - lastLeaderboardRender > 500) {
+    lastLeaderboardRender = now;
+    renderLeaderboard();
   }
 }
 

@@ -345,3 +345,56 @@ html, body {
 }
 
 #mute-btn.muted { opacity: 0.55; }
+
+#leaderboard {
+  position: fixed;
+  top: 6.25rem;
+  right: 1rem;
+  width: 11rem;
+  background: rgba(10, 5, 20, 0.55);
+  border: 1px solid rgba(198, 75, 255, 0.35);
+  border-radius: 12px;
+  padding: 0.45rem 0.65rem 0.5rem;
+  font-size: 0.78rem;
+  z-index: 10;
+  pointer-events: none;
+  text-shadow: 0 0 6px rgba(198, 75, 255, 0.5);
+}
+
+.leaderboard-title {
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  color: var(--accent2);
+  font-weight: 700;
+  margin-bottom: 0.35rem;
+  text-align: center;
+}
+
+.lb-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-variant-numeric: tabular-nums;
+  padding: 0.08rem 0;
+}
+
+.lb-row.self {
+  color: var(--accent3);
+  font-weight: 700;
+}
+
+.lb-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 6.5rem;
+}
+
+.lb-time { opacity: 0.92; }
+
+.lb-empty {
+  opacity: 0.5;
+  font-style: italic;
+  text-align: center;
+  font-size: 0.72rem;
+}
