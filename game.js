@@ -4,17 +4,36 @@
 //   registry (games.json). Walk into a portal to travel.
 // - Trystero P2P for presence (see other players in the lobby) and
 //   text chat (speech bubbles above avatars + HTML chat log).
+// - Cute procedural bean avatars with idle + walking animations.
+// - Persistent display name via localStorage; rename with N key or
+//   the pencil button in the HUD.
 //
 // Runs fully in the browser, no backend, no build step.
 
 import * as THREE from 'https://esm.sh/three@0.160.1';
 
 // ------------------------------------------------------------------
-// Portal protocol intake
+// Portal protocol intake + name resolution
 // ------------------------------------------------------------------
 
 const incoming = Portal.readPortalParams();
-document.getElementById('username').textContent = incoming.username;
+
+// Priority: portal arrival URL > localStorage > other URL param > guest
+const urlName = new URLSearchParams(location.search).get('username');
+let username = incoming.username;
+let firstVisit = false;
+try {
+  const saved = localStorage.getItem('lobby:username');
+  if (incoming.fromPortal && urlName) {
+    username = urlName;
+  } else if (saved) {
+    username = saved;
+  } else if (!urlName) {
+    firstVisit = true;
+  }
+} catch {}
+
+document.getElementById('username-text').textContent = username;
 
 // ------------------------------------------------------------------
 // Three.js scene
@@ -37,7 +56,7 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight, false);
 });
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
 const keyLight = new THREE.DirectionalLight(0xffffff, 0.7);
 keyLight.position.set(8, 20, 10);
 scene.add(keyLight);
@@ -139,41 +158,173 @@ function disposeSprite(sprite) {
 }
 
 // ------------------------------------------------------------------
-// Avatars
+// Cute bean avatar
 // ------------------------------------------------------------------
+//
+// Hierarchy:
+//   group            — world placement + rotation, bubble + nameTag attach here
+//     body (group)   — animated (idle bob + walk bob)
+//       torso
+//       eyes (whites + pupils)
+//       leftArm (group, pivots at shoulder)
+//         armMesh
+//       rightArm ...
+//       leftLeg (group, pivots at hip)
+//         legMesh
+//       rightLeg ...
 
 function makeAvatar(colorHex, name) {
   const hex = (colorHex || 'ffffff').replace('#', '');
   const color = new THREE.Color('#' + hex);
+  const bodyMat = new THREE.MeshStandardMaterial({
+    color,
+    emissive: color,
+    emissiveIntensity: 0.35,
+    roughness: 0.45,
+    metalness: 0.1,
+  });
+
   const group = new THREE.Group();
 
-  const body = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.38, 0.9, 4, 12),
-    new THREE.MeshStandardMaterial({
-      color,
-      emissive: color,
-      emissiveIntensity: 0.4,
-      roughness: 0.45,
-      metalness: 0.15,
-    })
-  );
-  body.position.y = 0.83;
+  const body = new THREE.Group();
+  body.position.y = 0.8;
   group.add(body);
 
+  // Torso (slightly tall sphere)
+  const torso = new THREE.Mesh(
+    new THREE.SphereGeometry(0.42, 22, 18),
+    bodyMat
+  );
+  torso.scale.set(1, 1.22, 1);
+  body.add(torso);
+
+  // Eyes — whites + pupils, on the front (+Z in local space).
+  const eyeWhiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const eyeBlackMat = new THREE.MeshBasicMaterial({ color: 0x120826 });
+  const eyeWGeom = new THREE.SphereGeometry(0.1, 14, 12);
+  const eyePGeom = new THREE.SphereGeometry(0.048, 10, 8);
+  const eyeOffsets = [-0.14, 0.14];
+  for (const dx of eyeOffsets) {
+    const w = new THREE.Mesh(eyeWGeom, eyeWhiteMat);
+    w.position.set(dx, 0.18, 0.34);
+    body.add(w);
+    const p = new THREE.Mesh(eyePGeom, eyeBlackMat);
+    p.position.set(dx, 0.18, 0.42);
+    body.add(p);
+  }
+
+  // Mouth — a tiny dark ellipse on the front.
+  const mouth = new THREE.Mesh(
+    new THREE.SphereGeometry(0.045, 10, 8),
+    eyeBlackMat
+  );
+  mouth.scale.set(1.4, 0.55, 0.4);
+  mouth.position.set(0, 0.02, 0.43);
+  body.add(mouth);
+
+  // Arms — pivot at shoulder, ball mesh hanging below
+  const armGeom = new THREE.SphereGeometry(0.13, 14, 12);
+  function makeLimb(x, y, z, meshOffsetY) {
+    const pivot = new THREE.Group();
+    pivot.position.set(x, y, z);
+    const mesh = new THREE.Mesh(armGeom, bodyMat);
+    mesh.position.y = meshOffsetY;
+    pivot.add(mesh);
+    return pivot;
+  }
+  const leftArm  = makeLimb(-0.44, 0.05, 0, -0.18);
+  const rightArm = makeLimb( 0.44, 0.05, 0, -0.18);
+  body.add(leftArm, rightArm);
+
+  // Legs — pivot at hip, stubby cylinder hanging below
+  const legGeom = new THREE.CylinderGeometry(0.11, 0.11, 0.34, 12);
+  function makeLeg(x) {
+    const pivot = new THREE.Group();
+    pivot.position.set(x, -0.42, 0);
+    const mesh = new THREE.Mesh(legGeom, bodyMat);
+    mesh.position.y = -0.17;
+    pivot.add(mesh);
+    return pivot;
+  }
+  const leftLeg  = makeLeg(-0.18);
+  const rightLeg = makeLeg( 0.18);
+  body.add(leftLeg, rightLeg);
+
+  // Name tag floats above group (not body), stays steady while body bobs.
   const nameTag = makeLabel(name || '?', '#' + hex);
-  nameTag.position.set(0, 2.1, 0);
+  nameTag.position.set(0, 2.15, 0);
   nameTag.scale.multiplyScalar(0.55);
   group.add(nameTag);
-  group.userData.nameTag = nameTag;
 
+  group.userData = {
+    body,
+    leftArm, rightArm,
+    leftLeg, rightLeg,
+    nameTag,
+    colorHex: '#' + hex,
+    animTime: Math.random() * 5, // desync idle bobs between peers
+    armSwing: 0,
+    legSwing: 0,
+    bodyBaseY: 0.8,
+    bubble: null,
+    bubbleExpires: 0,
+  };
   return group;
 }
 
+function setAvatarName(group, name, colorHex) {
+  const ud = group.userData;
+  if (ud.nameTag) {
+    group.remove(ud.nameTag);
+    disposeSprite(ud.nameTag);
+  }
+  const tag = makeLabel(name || '?', colorHex || ud.colorHex);
+  tag.position.set(0, 2.15, 0);
+  tag.scale.multiplyScalar(0.55);
+  group.add(tag);
+  ud.nameTag = tag;
+}
+
+function animateAvatar(group, dt, isMoving) {
+  const ud = group.userData;
+  ud.animTime += dt;
+  const t = ud.animTime;
+
+  if (isMoving) {
+    // Walking: faster swing + bob
+    const freq = 9;
+    const s = Math.sin(t * freq);
+    const targetArm = s * 0.85;
+    const targetLeg = s * 0.65;
+    const k = Math.min(1, dt * 18);
+    ud.armSwing += (targetArm - ud.armSwing) * k;
+    ud.legSwing += (targetLeg - ud.legSwing) * k;
+    ud.body.position.y = ud.bodyBaseY + Math.abs(s) * 0.08;
+  } else {
+    // Idle: gentle bob, ease limbs back to rest
+    const bob = Math.sin(t * 2.2) * 0.045;
+    ud.body.position.y = ud.bodyBaseY + bob;
+    const k = Math.min(1, dt * 6);
+    ud.armSwing += (0 - ud.armSwing) * k;
+    ud.legSwing += (0 - ud.legSwing) * k;
+  }
+
+  ud.leftArm.rotation.x  =  ud.armSwing;
+  ud.rightArm.rotation.x = -ud.armSwing;
+  ud.leftLeg.rotation.x  = -ud.legSwing;
+  ud.rightLeg.rotation.x =  ud.legSwing;
+}
+
+// ------------------------------------------------------------------
+// Player setup
+// ------------------------------------------------------------------
+
 const player = {
-  group: makeAvatar(incoming.color, incoming.username),
+  group: makeAvatar(incoming.color, username),
   pos: new THREE.Vector3(0, 0, 0),
   yaw: 0,
   speed: incoming.speed || 5,
+  isMoving: false,
 };
 scene.add(player.group);
 
@@ -184,10 +335,8 @@ const tmpCamTarget = new THREE.Vector3();
 function updateCamera(dt) {
   tmpCamTarget.copy(player.pos).add(camOffset);
   camera.position.lerp(tmpCamTarget, Math.min(1, dt * 5));
-  const look = player.pos.clone().add(camLookOffset);
-  camera.lookAt(look);
+  camera.lookAt(player.pos.clone().add(camLookOffset));
 }
-// Snap camera on first frame
 camera.position.copy(player.pos).add(camOffset);
 camera.lookAt(player.pos.clone().add(camLookOffset));
 
@@ -200,9 +349,7 @@ const portals = [];
 function makePortal({ title, url, colorHex, position, radius = 1.8 }) {
   const group = new THREE.Group();
   group.position.copy(position);
-  // Face the center of the room
-  const look = new THREE.Vector3(0, position.y, 0);
-  group.lookAt(look);
+  group.lookAt(new THREE.Vector3(0, position.y, 0));
 
   const color = new THREE.Color(colorHex);
   const ring = new THREE.Mesh(
@@ -241,10 +388,6 @@ function makePortal({ title, url, colorHex, position, radius = 1.8 }) {
   return group;
 }
 
-// ------------------------------------------------------------------
-// Portal registry load
-// ------------------------------------------------------------------
-
 async function setupPortals() {
   const games = await Portal.fetchJamRegistry();
   const here = window.location.href.replace(/\/$/, '');
@@ -265,44 +408,51 @@ async function setupPortals() {
     });
   });
 
-  // Return portal near spawn
   if (incoming.ref) {
     makePortal({
       title: '← Return',
       url: incoming.ref,
       colorHex: '#4ff0ff',
-      position: new THREE.Vector3(0, 2.2, -5),
+      position: new THREE.Vector3(0, 2.2, -4),
       radius: 1.5,
     });
   }
 }
 
-// Spawn offset if coming from a portal
-if (incoming.fromPortal) {
-  player.pos.set(0, 0, -1.5);
-  player.yaw = Math.PI; // face away from return portal
-}
+// Default third-person orientation: face away from the camera.
+player.yaw = Math.PI;
 player.group.position.copy(player.pos);
 player.group.rotation.y = player.yaw;
+
+// Grace window after spawning so arrivals don't instantly re-trigger
+// the return portal they just came through.
+const spawnGraceUntil = performance.now() + (incoming.fromPortal ? 1500 : 0);
 
 // ------------------------------------------------------------------
 // Input
 // ------------------------------------------------------------------
 
 const keys = {};
-let chatting = false;
+const chatInput = document.getElementById('chat-input');
+const nameInput = document.getElementById('name-input');
+const renameBtn = document.getElementById('rename-btn');
+const chatLog = document.getElementById('chat-log');
+const usernameText = document.getElementById('username-text');
+
+function isInputFocused() {
+  const a = document.activeElement;
+  return a === chatInput || a === nameInput;
+}
 
 addEventListener('keydown', e => {
-  if (chatting) return;
-  if (e.key === 'Enter' || e.key.toLowerCase() === 't') {
-    e.preventDefault();
-    openChat();
-    return;
-  }
-  keys[e.key.toLowerCase()] = true;
+  if (isInputFocused()) return;
+  const k = e.key.toLowerCase();
+  if (k === 'enter' || k === 't') { e.preventDefault(); openChat(); return; }
+  if (k === 'n')                   { e.preventDefault(); openNameInput(); return; }
+  keys[k] = true;
 });
 addEventListener('keyup', e => {
-  if (chatting) return;
+  if (isInputFocused()) return;
   keys[e.key.toLowerCase()] = false;
 });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
@@ -311,8 +461,6 @@ addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 // Chat UI
 // ------------------------------------------------------------------
 
-const chatLog = document.getElementById('chat-log');
-const chatInput = document.getElementById('chat-input');
 const MAX_LOG_LINES = 10;
 
 function escapeHtml(s = '') {
@@ -336,29 +484,28 @@ function appendChatLine(name, color, text) {
 }
 
 function setBubble(avatarGroup, text, color) {
-  const old = avatarGroup.userData.bubble;
-  if (old) {
-    avatarGroup.remove(old);
-    disposeSprite(old);
+  const ud = avatarGroup.userData;
+  if (ud.bubble) {
+    avatarGroup.remove(ud.bubble);
+    disposeSprite(ud.bubble);
   }
   const sprite = makeLabel(text, color || '#ffffff');
-  sprite.position.set(0, 3.1, 0);
+  sprite.position.set(0, 3.0, 0);
   sprite.scale.multiplyScalar(0.7);
   avatarGroup.add(sprite);
-  avatarGroup.userData.bubble = sprite;
-  avatarGroup.userData.bubbleExpires = performance.now() + 4500;
+  ud.bubble = sprite;
+  ud.bubbleExpires = performance.now() + 4500;
 }
 
 function clearExpiredBubble(avatarGroup) {
-  const expires = avatarGroup.userData.bubbleExpires || 0;
-  if (expires && performance.now() > expires) {
-    const b = avatarGroup.userData.bubble;
-    if (b) {
-      avatarGroup.remove(b);
-      disposeSprite(b);
+  const ud = avatarGroup.userData;
+  if (ud.bubbleExpires && performance.now() > ud.bubbleExpires) {
+    if (ud.bubble) {
+      avatarGroup.remove(ud.bubble);
+      disposeSprite(ud.bubble);
     }
-    avatarGroup.userData.bubble = null;
-    avatarGroup.userData.bubbleExpires = 0;
+    ud.bubble = null;
+    ud.bubbleExpires = 0;
   }
 }
 
@@ -377,7 +524,6 @@ function handleChat(msg, peerId, isSelf) {
 }
 
 function openChat() {
-  chatting = true;
   for (const k in keys) keys[k] = false;
   chatInput.style.display = 'block';
   chatInput.value = '';
@@ -387,22 +533,54 @@ function closeChat(send) {
   const text = chatInput.value.trim();
   chatInput.style.display = 'none';
   chatInput.blur();
-  chatting = false;
   if (send && text) {
-    const msg = {
-      name: incoming.username,
-      color: '#' + incoming.color,
-      text,
-    };
+    const msg = { name: username, color: '#' + incoming.color, text };
     handleChat(msg, null, true);
     if (sendChat) sendChat(msg);
   }
 }
 chatInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter') { e.preventDefault(); closeChat(true); }
-  else if (e.key === 'Escape') { e.preventDefault(); closeChat(false); }
   e.stopPropagation();
+  if (e.key === 'Enter')       { e.preventDefault(); closeChat(true); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeChat(false); }
 });
+
+// ------------------------------------------------------------------
+// Name UI
+// ------------------------------------------------------------------
+
+function openNameInput() {
+  for (const k in keys) keys[k] = false;
+  nameInput.style.display = 'block';
+  nameInput.value = username.startsWith('guest-') ? '' : username;
+  requestAnimationFrame(() => { nameInput.focus(); nameInput.select(); });
+}
+function closeNameInput(commit) {
+  const text = nameInput.value.trim().slice(0, 24);
+  nameInput.style.display = 'none';
+  nameInput.blur();
+  if (commit && text && text !== username) {
+    setUsername(text);
+  }
+}
+function setUsername(next) {
+  username = next;
+  usernameText.textContent = username;
+  setAvatarName(player.group, username, '#' + incoming.color);
+  try { localStorage.setItem('lobby:username', username); } catch {}
+  broadcastSelf();
+}
+nameInput.addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.key === 'Enter')       { e.preventDefault(); closeNameInput(true); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeNameInput(false); }
+});
+renameBtn.addEventListener('click', () => openNameInput());
+
+// Auto-prompt once on true first visit (no URL param, no saved name)
+if (firstVisit) {
+  setTimeout(openNameInput, 600);
+}
 
 // ------------------------------------------------------------------
 // Multiplayer — Trystero
@@ -429,7 +607,8 @@ function broadcastSelf() {
     z: player.pos.z,
     yaw: player.yaw,
     color: '#' + incoming.color,
-    username: incoming.username,
+    username,
+    moving: player.isMoving,
   });
 }
 
@@ -487,12 +666,14 @@ async function setupMultiplayer() {
       }
       const prevRX = peer.state?.renderX ?? data.x ?? 0;
       const prevRZ = peer.state?.renderZ ?? data.z ?? 0;
+      const prevName = peer.state?.username;
       peer.state = {
         x: data.x ?? 0,
         z: data.z ?? 0,
         yaw: data.yaw ?? 0,
         color: data.color || '#ffffff',
         username: data.username || '?',
+        moving: !!data.moving,
         renderX: prevRX,
         renderZ: prevRZ,
       };
@@ -502,6 +683,8 @@ async function setupMultiplayer() {
         peer.group.rotation.y = peer.state.yaw;
         scene.add(peer.group);
         refreshPeerCount();
+      } else if (prevName !== peer.state.username) {
+        setAvatarName(peer.group, peer.state.username, peer.state.color);
       }
     });
 
@@ -533,32 +716,35 @@ let lastBroadcast = 0;
 const MAX_RADIUS = 24;
 
 function update(dt) {
-  if (!chatting) {
-    let mx = 0, mz = 0;
+  // Movement (locked out while an input is focused)
+  let mx = 0, mz = 0;
+  if (!isInputFocused()) {
     if (keys['w'] || keys['arrowup'])    mz -= 1;
     if (keys['s'] || keys['arrowdown'])  mz += 1;
     if (keys['a'] || keys['arrowleft'])  mx -= 1;
     if (keys['d'] || keys['arrowright']) mx += 1;
-    if (mx || mz) {
-      const len = Math.hypot(mx, mz);
-      mx /= len; mz /= len;
-      player.pos.x += mx * player.speed * dt;
-      player.pos.z += mz * player.speed * dt;
-      const r = Math.hypot(player.pos.x, player.pos.z);
-      if (r > MAX_RADIUS) {
-        player.pos.x *= MAX_RADIUS / r;
-        player.pos.z *= MAX_RADIUS / r;
-      }
-      const targetYaw = Math.atan2(mx, mz);
-      let diff = targetYaw - player.yaw;
-      while (diff > Math.PI)  diff -= Math.PI * 2;
-      while (diff < -Math.PI) diff += Math.PI * 2;
-      player.yaw += diff * Math.min(1, dt * 12);
+  }
+  player.isMoving = (mx !== 0 || mz !== 0);
+  if (player.isMoving) {
+    const len = Math.hypot(mx, mz);
+    mx /= len; mz /= len;
+    player.pos.x += mx * player.speed * dt;
+    player.pos.z += mz * player.speed * dt;
+    const r = Math.hypot(player.pos.x, player.pos.z);
+    if (r > MAX_RADIUS) {
+      player.pos.x *= MAX_RADIUS / r;
+      player.pos.z *= MAX_RADIUS / r;
     }
+    const targetYaw = Math.atan2(mx, mz);
+    let diff = targetYaw - player.yaw;
+    while (diff > Math.PI)  diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    player.yaw += diff * Math.min(1, dt * 12);
   }
 
   player.group.position.copy(player.pos);
   player.group.rotation.y = player.yaw;
+  animateAvatar(player.group, dt, player.isMoving);
 
   // Portal pulse + trigger
   const t = performance.now() / 1000;
@@ -567,14 +753,14 @@ function update(dt) {
     p.group.rotation.z = Math.sin(t * 1.2 + p.group.position.z) * 0.04;
   }
 
-  if (!redirecting) {
+  if (!redirecting && performance.now() > spawnGraceUntil) {
     for (const p of portals) {
       const dx = player.pos.x - p.group.position.x;
       const dz = player.pos.z - p.group.position.z;
       if (Math.hypot(dx, dz) < p.radius) {
         redirecting = true;
         Portal.sendPlayerThroughPortal(p.url, {
-          username: incoming.username,
+          username,
           color: incoming.color,
           speed: player.speed,
         });
@@ -583,7 +769,7 @@ function update(dt) {
     }
   }
 
-  // Interpolate peers
+  // Interpolate peers + animate
   for (const peer of peers.values()) {
     if (!peer.state || !peer.group) continue;
     const k = Math.min(1, dt * 12);
@@ -592,6 +778,7 @@ function update(dt) {
     peer.group.position.x = peer.state.renderX;
     peer.group.position.z = peer.state.renderZ;
     peer.group.rotation.y = peer.state.yaw;
+    animateAvatar(peer.group, dt, !!peer.state.moving);
     clearExpiredBubble(peer.group);
   }
   clearExpiredBubble(player.group);

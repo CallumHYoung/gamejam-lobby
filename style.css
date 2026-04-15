@@ -35,10 +35,33 @@ html, body {
   pointer-events: none;
 }
 
-#username {
+#username-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
   font-weight: bold;
   color: var(--accent2);
   font-size: 1.1rem;
+}
+
+#rename-btn {
+  pointer-events: auto;
+  background: rgba(255, 79, 216, 0.08);
+  border: 1px solid rgba(255, 79, 216, 0.5);
+  color: var(--accent2);
+  border-radius: 6px;
+  padding: 0.05rem 0.4rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1.2;
+  font-family: inherit;
+  text-shadow: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+#rename-btn:hover {
+  background: rgba(255, 79, 216, 0.2);
+  border-color: var(--accent2);
 }
 
 #peers {
@@ -121,4 +144,29 @@ html, body {
 #chat-input:focus {
   border-color: var(--accent2);
   box-shadow: 0 0 50px rgba(255, 79, 216, 0.45);
+}
+
+#name-input {
+  position: fixed;
+  left: 50%;
+  top: 40%;
+  transform: translate(-50%, -50%);
+  width: min(360px, 80vw);
+  padding: 0.8rem 1rem;
+  font-size: 1.05rem;
+  font-family: inherit;
+  text-align: center;
+  color: var(--fg);
+  background: rgba(10, 5, 20, 0.92);
+  border: 2px solid var(--accent2);
+  border-radius: 12px;
+  outline: none;
+  box-shadow: 0 0 60px rgba(255, 79, 216, 0.45);
+  z-index: 20;
+  display: none;
+}
+
+#name-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 70px rgba(198, 75, 255, 0.55);
 }
