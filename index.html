@@ -9,13 +9,16 @@
 <body>
 <canvas id="game"></canvas>
 
+<audio id="bgm" src="Portal%20Lobby%20Drift.mp3" loop preload="auto"></audio>
+<button id="mute-btn" type="button" title="mute music (M)" aria-label="mute music">🔊</button>
+
 <div id="hud">
   <div id="username-row">
     <span id="username-text">loading…</span>
     <button id="rename-btn" type="button" title="rename (N)" aria-label="rename">✎</button>
   </div>
   <div id="peers">1 in lobby</div>
-  <div id="hint">click to look · WASD move · <kbd>Space</kbd> jump · <kbd>E</kbd> pick up · sit · fly · click to shoot · <kbd>T</kbd>/<kbd>Enter</kbd> chat · <kbd>Y</kbd> emote · <kbd>N</kbd> rename · scroll zoom</div>
+  <div id="hint">click to look · WASD move · <kbd>Space</kbd> jump · <kbd>E</kbd> pick up · sit · fly · click to shoot · <kbd>T</kbd>/<kbd>Enter</kbd> chat · <kbd>Y</kbd> emote · <kbd>N</kbd> rename · <kbd>M</kbd> mute · scroll zoom</div>
 </div>
 
 <div id="scores">

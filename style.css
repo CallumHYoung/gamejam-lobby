@@ -314,3 +314,34 @@ html, body {
   opacity: 1;
   transform: translate(-50%, -55%) scale(1.05);
 }
+
+#mute-btn {
+  position: fixed;
+  top: 3.25rem;
+  right: 1rem;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 50%;
+  background: rgba(10, 5, 20, 0.6);
+  border: 1px solid rgba(198, 75, 255, 0.45);
+  color: var(--fg);
+  font-size: 1rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 11;
+  pointer-events: auto;
+  padding: 0;
+  text-shadow: 0 0 8px rgba(198, 75, 255, 0.55);
+  transition: background 0.15s, border-color 0.15s, transform 0.12s;
+}
+
+#mute-btn:hover {
+  background: rgba(40, 15, 60, 0.9);
+  border-color: var(--accent2);
+  transform: scale(1.08);
+}
+
+#mute-btn.muted { opacity: 0.55; }

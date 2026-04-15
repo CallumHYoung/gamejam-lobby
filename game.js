@@ -1896,6 +1896,7 @@ addEventListener('keydown', e => {
   if (k === 'enter' || k === 't') { e.preventDefault(); openChat(); return; }
   if (k === 'n')                   { e.preventDefault(); openNameInput(); return; }
   if (k === 'y')                   { e.preventDefault(); openEmoteWheel(); return; }
+  if (k === 'm')                   { e.preventDefault(); toggleMute(); return; }
   if (k === 'e') {
     e.preventDefault();
     if (player.piloting)          { exitPlane(); return; }
@@ -2256,6 +2257,54 @@ function updateParkour(dt) {
 }
 
 updateScoresHUD();
+
+// Background music — loops quietly, mute via M or the button.
+// Browser autoplay rules need a user gesture, so we also kick the
+// playback off on the first pointerdown/keydown after load.
+const bgmEl = document.getElementById('bgm');
+const muteBtn = document.getElementById('mute-btn');
+let bgmMuted = false;
+try { bgmMuted = localStorage.getItem('lobby:bgmMuted') === '1'; } catch {}
+
+function applyMute() {
+  if (bgmEl) bgmEl.muted = bgmMuted;
+  if (muteBtn) {
+    muteBtn.textContent = bgmMuted ? '🔇' : '🔊';
+    muteBtn.classList.toggle('muted', bgmMuted);
+    muteBtn.title = bgmMuted ? 'unmute music (M)' : 'mute music (M)';
+    muteBtn.setAttribute('aria-label', muteBtn.title);
+  }
+}
+function toggleMute() {
+  bgmMuted = !bgmMuted;
+  try { localStorage.setItem('lobby:bgmMuted', bgmMuted ? '1' : '0'); } catch {}
+  applyMute();
+  // Re-kick playback if the user unmutes before the first real gesture
+  // has landed on the <audio> element.
+  if (!bgmMuted) tryPlayBgm();
+}
+function tryPlayBgm() {
+  if (!bgmEl) return;
+  bgmEl.volume = 0.35;
+  const p = bgmEl.play();
+  if (p && typeof p.catch === 'function') p.catch(() => {});
+}
+applyMute();
+tryPlayBgm();
+
+const bgmGestureKick = () => {
+  tryPlayBgm();
+  removeEventListener('pointerdown', bgmGestureKick);
+  removeEventListener('keydown', bgmGestureKick);
+};
+addEventListener('pointerdown', bgmGestureKick);
+addEventListener('keydown', bgmGestureKick);
+
+if (muteBtn) muteBtn.addEventListener('click', e => {
+  e.stopPropagation();
+  toggleMute();
+});
+
 function broadcastSelf() {
   if (!sendState) return;
   const payload = {
