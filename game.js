@@ -700,10 +700,19 @@ function makePortal({ title, url, colorHex, position, radius = 1.8, thumbnailUrl
   return group;
 }
 
+function resolveThumb(game) {
+  if (!game || !game.thumbnail) return null;
+  try { return new URL(game.thumbnail, Portal.REGISTRY_URL).href; } catch { return null; }
+}
+
+function normalizeUrl(u) {
+  return String(u || '').split('?')[0].replace(/\/$/, '');
+}
+
 async function setupPortals() {
   const games = await Portal.fetchJamRegistry();
-  const here = window.location.href.replace(/\/$/, '');
-  const entries = games.filter(g => g && g.url && !here.startsWith(g.url.replace(/\/$/, '')));
+  const here = normalizeUrl(window.location.href);
+  const entries = games.filter(g => g && g.url && !here.startsWith(normalizeUrl(g.url)));
 
   const n = Math.max(entries.length, 1);
   const radius = 18;
@@ -712,26 +721,26 @@ async function setupPortals() {
     const hue = Math.round((i / n) * 360);
     const color = new THREE.Color(`hsl(${hue}, 85%, 62%)`);
     const colorHex = '#' + color.getHexString();
-    let thumbnailUrl = null;
-    if (g.thumbnail) {
-      try { thumbnailUrl = new URL(g.thumbnail, Portal.REGISTRY_URL).href; } catch {}
-    }
     makePortal({
       title: g.title || g.id || 'mystery game',
       url: g.url,
       colorHex,
       position: new THREE.Vector3(Math.cos(angle) * radius, 2.4, Math.sin(angle) * radius),
-      thumbnailUrl,
+      thumbnailUrl: resolveThumb(g),
     });
   });
 
   if (incoming.ref) {
+    const refNorm = normalizeUrl(incoming.ref);
+    const refGame = games.find(g => g && g.url && normalizeUrl(g.url) === refNorm);
+    const refTitle = refGame ? `← ${refGame.title || refGame.id}` : '← Return';
     makePortal({
-      title: '← Return',
+      title: refTitle,
       url: incoming.ref,
       colorHex: '#4ff0ff',
       position: new THREE.Vector3(0, 2.2, -4),
       radius: 1.5,
+      thumbnailUrl: resolveThumb(refGame),
     });
   }
 }
