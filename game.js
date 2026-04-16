@@ -581,45 +581,91 @@ function tryTogglePickup() {
   broadcastBall(best);
 }
 
-function shootHeldBall() {
+// Shot speed is fixed; aim direction comes from where the camera is
+// looking, so players control arc + power purely through pitch.
+const SHOT_SPEED = 13;
+const _shotDirScratch = new THREE.Vector3();
+
+function getShotInitial() {
   const ball = balls.find(b => b.heldLocal);
-  if (!ball || hoops.length === 0) return;
+  if (!ball) return null;
+  camera.getWorldDirection(_shotDirScratch);
+  const dir = _shotDirScratch.clone();
+  // Tiny forward offset so the ball doesn't spawn inside the player.
+  const start = new THREE.Vector3(
+    player.pos.x + dir.x * 0.45,
+    player.pos.y + 1.35,
+    player.pos.z + dir.z * 0.45,
+  );
+  const vel = dir.multiplyScalar(SHOT_SPEED);
+  return { ball, start, vel };
+}
 
-  // Autoaim: prefer the hoop the player is facing, lightly penalize distance.
-  const fwdX = -Math.sin(camYaw);
-  const fwdZ = -Math.cos(camYaw);
-  let target = null;
-  let bestScore = -Infinity;
-  for (const h of hoops) {
-    const dx = h.pos.x - player.pos.x;
-    const dz = h.pos.z - player.pos.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist < 0.001) continue;
-    const dot = (fwdX * dx + fwdZ * dz) / dist;
-    const score = dot - dist * 0.01;
-    if (score > bestScore) { bestScore = score; target = h; }
-  }
-  if (!target) return;
-
-  // Projectile arc: solve for initial velocity given a fixed flight time.
-  const sx = player.pos.x;
-  const sy = player.pos.y + 1.35;
-  const sz = player.pos.z;
-  const tx = target.pos.x;
-  const ty = target.pos.y;
-  const tz = target.pos.z;
-
-  const horiz = Math.hypot(tx - sx, tz - sz);
-  const T = Math.max(0.7, Math.min(1.5, 0.45 + horiz * 0.09));
-  const vx = (tx - sx) / T;
-  const vz = (tz - sz) / T;
-  const vy = (ty - sy + 0.5 * BALL_GRAVITY * T * T) / T;
-
+function shootHeldBall() {
+  const init = getShotInitial();
+  if (!init) return;
+  const { ball, start, vel } = init;
   ball.heldLocal = false;
   ball.holderPeerId = null;
-  ball.pos.set(sx, sy, sz);
-  ball.vel.set(vx, vy, vz);
+  ball.pos.copy(start);
+  ball.prev.copy(start);
+  ball.vel.copy(vel);
   broadcastBall(ball);
+}
+
+// Trajectory preview — a faint dotted line of where the held ball
+// would land if shot right now. Updated each frame from the live
+// camera direction so it tracks pitch/yaw in real time.
+const AIM_GUIDE_POINTS = 32;
+const AIM_GUIDE_DT = 0.05;
+const aimGuide = new THREE.Line(
+  new THREE.BufferGeometry().setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(new Float32Array(AIM_GUIDE_POINTS * 3), 3),
+  ),
+  new THREE.LineBasicMaterial({
+    color: 0xffd88a,
+    transparent: true,
+    opacity: 0.7,
+    depthTest: true,
+  }),
+);
+aimGuide.visible = false;
+aimGuide.frustumCulled = false;
+scene.add(aimGuide);
+
+function updateAimGuide() {
+  const init = getShotInitial();
+  if (!init) { aimGuide.visible = false; return; }
+  aimGuide.visible = true;
+  const { start, vel, ball } = init;
+  const positions = aimGuide.geometry.attributes.position.array;
+  const p = start.clone();
+  const v = vel.clone();
+  let lastIdx = 0;
+  for (let i = 0; i < AIM_GUIDE_POINTS; i++) {
+    positions[i * 3 + 0] = p.x;
+    positions[i * 3 + 1] = p.y;
+    positions[i * 3 + 2] = p.z;
+    lastIdx = i;
+    if (p.y <= ball.radius && i > 0) break;
+    v.y -= BALL_GRAVITY * AIM_GUIDE_DT;
+    p.x += v.x * AIM_GUIDE_DT;
+    p.y += v.y * AIM_GUIDE_DT;
+    p.z += v.z * AIM_GUIDE_DT;
+  }
+  // Collapse trailing slots onto the last real point so the line
+  // doesn't shoot off to (0,0,0).
+  const lx = positions[lastIdx * 3 + 0];
+  const ly = positions[lastIdx * 3 + 1];
+  const lz = positions[lastIdx * 3 + 2];
+  for (let i = lastIdx + 1; i < AIM_GUIDE_POINTS; i++) {
+    positions[i * 3 + 0] = lx;
+    positions[i * 3 + 1] = ly;
+    positions[i * 3 + 2] = lz;
+  }
+  aimGuide.geometry.attributes.position.needsUpdate = true;
+  aimGuide.geometry.computeBoundingSphere();
 }
 
 function updateBall(ball, dt) {
@@ -3217,6 +3263,7 @@ function loop() {
   update(dt);
   updateDayNight(performance.now() / 1000);
   updateCamera(dt);
+  updateAimGuide();
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
 }
