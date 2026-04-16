@@ -398,3 +398,80 @@ html, body {
   text-align: center;
   font-size: 0.72rem;
 }
+
+/* ---- Type-race overlay ---- */
+
+#race-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  padding-bottom: 10vh;
+  z-index: 15;
+  pointer-events: none;
+  background: transparent;
+}
+
+#race-overlay[hidden] { display: none; }
+
+#race-countdown {
+  font-size: 5rem;
+  font-weight: 900;
+  color: var(--accent3);
+  text-shadow: 0 0 30px rgba(79, 240, 255, 0.8);
+  margin-bottom: 1.2rem;
+}
+
+#race-sentence-box {
+  background: rgba(10, 5, 20, 0.85);
+  padding: 1rem 1.6rem;
+  border-radius: 14px;
+  border: 2px solid var(--accent);
+  font-size: 1.35rem;
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+  max-width: 80vw;
+  line-height: 1.7;
+  letter-spacing: 0.04em;
+  word-wrap: break-word;
+}
+
+#race-typed { color: var(--accent3); }
+
+#race-cursor {
+  color: #fff;
+  background: rgba(198, 75, 255, 0.45);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+#race-remaining { color: rgba(255,255,255,0.35); }
+
+.race-error #race-cursor { background: rgba(255, 50, 50, 0.7); }
+
+#race-stats {
+  margin-top: 0.8rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--accent2);
+  letter-spacing: 0.05em;
+  text-shadow: 0 0 8px rgba(255, 79, 216, 0.55);
+}
+
+.race-hint {
+  position: absolute;
+  bottom: 1.5rem;
+  font-size: 0.72rem;
+  opacity: 0.4;
+}
+
+.race-hint kbd {
+  display: inline-block;
+  padding: 0 0.35em;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.2);
+  font-family: inherit;
+  font-size: 0.68rem;
+}

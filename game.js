@@ -351,6 +351,113 @@ const hoops = [];
 const benches = []; // { x, z, yaw, sitY }
 let plane = null;   // { group, prop, basePos, baseYaw, pitch }
 
+// ------------------------------------------------------------------
+// Type-racing arena
+// ------------------------------------------------------------------
+
+const RACE_SENTENCES = [
+  "The quick brown fox jumps over the lazy dog near the pond",
+  "Portal hopping is the fastest way to travel between worlds",
+  "Watch out for the ducks they are plotting something sinister",
+  "The parkour course spirals upward into the neon glow above",
+  "Kick the ball into the goal before the other team scores",
+  "Flying a plane over the lobby feels absolutely magnificent",
+  "Type faster and your animal will sprint ahead of the pack",
+  "Nothing beats sitting on a bench watching the sunset fade",
+  "Every portal leads to a new adventure waiting to begin today",
+  "The basketball soars through the air and swishes the net",
+  "Stars blink on at dusk while the streetlamps start to glow",
+  "Hamsters are surprisingly competitive when it comes to racing",
+  "Never underestimate a determined little critter on the track",
+  "The finish line is calling and your fingers are the engine",
+];
+
+const RACE_CX = 38, RACE_CZ = -38;
+const RACE_TRACK_LEN = 24;
+const RACE_LANES = 6;
+const RACE_LANE_W = 1.2;
+const RACE_START_X = RACE_CX - RACE_TRACK_LEN / 2;
+const RACE_SPEED_BOOST = 6.5;
+const RACE_ERROR_MULT = 0.15;
+const RACE_FRICTION = 0.93;
+const RACE_PAD_X = RACE_START_X - 3;
+const RACE_PAD_R = 1.5;
+
+function laneZ(i) {
+  return RACE_CZ - (RACE_LANES * RACE_LANE_W) / 2 + (i + 0.5) * RACE_LANE_W;
+}
+
+const race = {
+  active: false,
+  countdown: 0,
+  countdownEnd: 0,
+  sentence: '',
+  typed: 0,
+  errors: 0,
+  pos: 0,         // 0..RACE_TRACK_LEN
+  vel: 0,
+  finished: false,
+  finishTime: 0,
+  startTime: 0,
+  animal: null,
+  lane: 0,
+  onPad: false,
+  errorFlash: 0,
+  peerAnimals: new Map(), // peerId → { animal, lane, pos, targetPos }
+  nextPeerLane: 1,
+};
+
+function makeRaceAnimal(hexColor) {
+  const grp = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({
+    color: hexColor, roughness: 0.55, emissive: hexColor, emissiveIntensity: 0.15,
+  });
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.3, 14, 10), mat);
+  body.scale.set(1.3, 0.85, 0.9);
+  body.position.y = 0.3;
+  grp.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), mat);
+  head.position.set(0.42, 0.42, 0);
+  grp.add(head);
+  const eyeMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
+  const eyeGeom = new THREE.SphereGeometry(0.04, 8, 6);
+  for (const dz of [0.08, -0.08]) {
+    const eye = new THREE.Mesh(eyeGeom, eyeMat);
+    eye.position.set(0.56, 0.46, dz);
+    grp.add(eye);
+  }
+  const earGeom = new THREE.SphereGeometry(0.07, 8, 6);
+  for (const dz of [0.1, -0.1]) {
+    const ear = new THREE.Mesh(earGeom, mat);
+    ear.position.set(0.38, 0.62, dz);
+    grp.add(ear);
+  }
+  const legGeom = new THREE.CylinderGeometry(0.05, 0.05, 0.15, 8);
+  const legs = [];
+  for (const [lx, lz] of [[0.15, 0.15], [0.15, -0.15], [-0.15, 0.15], [-0.15, -0.15]]) {
+    const leg = new THREE.Mesh(legGeom, mat);
+    leg.position.set(lx, 0.07, lz);
+    grp.add(leg);
+    legs.push(leg);
+  }
+  grp.userData.legs = legs;
+  return grp;
+}
+
+function animateRaceAnimal(animal, vel, dt) {
+  if (!animal) return;
+  const speed = Math.abs(vel);
+  const t = performance.now() * 0.001;
+  animal.position.y = speed > 0.5 ? Math.abs(Math.sin(t * 14)) * 0.06 : 0;
+  const legs = animal.userData.legs;
+  if (!legs) return;
+  const phase = t * Math.min(speed, 15) * 2.5;
+  legs[0].rotation.x =  Math.sin(phase) * 0.7;
+  legs[1].rotation.x = -Math.sin(phase) * 0.7;
+  legs[2].rotation.x = -Math.sin(phase) * 0.7;
+  legs[3].rotation.x =  Math.sin(phase) * 0.7;
+}
+
 // Scoring — ball sports. Two soccer goal rectangles (x bounds, y bounds,
 // z plane, which side counts as "in") plus the basketball hoops array.
 const soccerGoals = [];
@@ -1114,6 +1221,56 @@ function collideBallWithPlayer(ball) {
       });
     }
   }
+
+  // ---------- Type-race track (NE quadrant) ----------
+  {
+    const tw = RACE_TRACK_LEN + 2;
+    const td = RACE_LANES * RACE_LANE_W + 2;
+    const trackSurface = new THREE.Mesh(
+      new THREE.PlaneGeometry(tw, td),
+      new THREE.MeshStandardMaterial({ color: 0x3a2020, roughness: 0.85 })
+    );
+    trackSurface.rotation.x = -Math.PI / 2;
+    trackSurface.position.set(RACE_CX, 0.02, RACE_CZ);
+    scene.add(trackSurface);
+
+    for (let i = 0; i <= RACE_LANES; i++) {
+      const z = laneZ(i) - RACE_LANE_W / 2;
+      const ln = new THREE.Mesh(
+        new THREE.PlaneGeometry(RACE_TRACK_LEN, 0.06),
+        lineMat
+      );
+      ln.rotation.x = -Math.PI / 2;
+      ln.position.set(RACE_CX, 0.03, z);
+      scene.add(ln);
+    }
+
+    const startLine = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.25, RACE_LANES * RACE_LANE_W),
+      new THREE.MeshBasicMaterial({ color: 0x44ff44 })
+    );
+    startLine.rotation.x = -Math.PI / 2;
+    startLine.position.set(RACE_START_X, 0.035, RACE_CZ);
+    scene.add(startLine);
+
+    const finishLine = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.25, RACE_LANES * RACE_LANE_W),
+      new THREE.MeshBasicMaterial({ color: 0xff4444 })
+    );
+    finishLine.rotation.x = -Math.PI / 2;
+    finishLine.position.set(RACE_START_X + RACE_TRACK_LEN, 0.035, RACE_CZ);
+    scene.add(finishLine);
+
+    const racePad = new THREE.Mesh(
+      new THREE.RingGeometry(RACE_PAD_R * 0.75, RACE_PAD_R, 48),
+      new THREE.MeshBasicMaterial({ color: 0x44ff44, side: THREE.DoubleSide, transparent: true, opacity: 0.85 })
+    );
+    racePad.rotation.x = -Math.PI / 2;
+    racePad.position.set(RACE_PAD_X, 0.04, RACE_CZ);
+    scene.add(racePad);
+
+    makeLamp(RACE_PAD_X, RACE_CZ + 10);
+  }
 }
 
 const PLAYER_RADIUS = 0.4;
@@ -1677,6 +1834,161 @@ function updatePlane(dt) {
   p.prop.rotation.z += (boosting ? 60 : 35) * dt;
 }
 
+// ------------------------------------------------------------------
+// Type-racing logic
+// ------------------------------------------------------------------
+
+const raceOverlay = document.getElementById('race-overlay');
+const raceCountdownEl = document.getElementById('race-countdown');
+const raceTypedEl = document.getElementById('race-typed');
+const raceCursorEl = document.getElementById('race-cursor');
+const raceRemainingEl = document.getElementById('race-remaining');
+const raceStatsEl = document.getElementById('race-stats');
+
+function joinRace() {
+  if (race.active) return;
+  dropHeldBallIfAny();
+  race.active = true;
+  race.countdown = 3;
+  race.countdownEnd = performance.now() + 3000;
+  race.sentence = RACE_SENTENCES[Math.floor(Math.random() * RACE_SENTENCES.length)];
+  race.typed = 0;
+  race.errors = 0;
+  race.pos = 0;
+  race.vel = 0;
+  race.finished = false;
+  race.finishTime = 0;
+  race.startTime = 0;
+  race.errorFlash = 0;
+  race.lane = 0;
+  race.nextPeerLane = 1;
+
+  const hex = parseInt(incoming.color, 16) || 0xff4444;
+  race.animal = makeRaceAnimal(hex);
+  race.animal.position.set(RACE_START_X, 0, laneZ(0));
+  scene.add(race.animal);
+
+  player.group.visible = false;
+  player.isMoving = false;
+  if (raceOverlay) raceOverlay.hidden = false;
+  updateRaceUI();
+}
+
+function forfeitRace() {
+  endRace();
+}
+
+function finishRace() {
+  race.finished = true;
+  race.finishTime = performance.now() - race.startTime;
+  const wpm = computeWPM();
+  showToast('FINISHED — ' + Math.round(race.finishTime / 10) / 100 + 's · ' + wpm + ' WPM');
+  setTimeout(endRace, 2000);
+}
+
+function endRace() {
+  race.active = false;
+  race.finished = false;
+  if (race.animal) { scene.remove(race.animal); race.animal = null; }
+  for (const [, pa] of race.peerAnimals) { scene.remove(pa.animal); }
+  race.peerAnimals.clear();
+  race.nextPeerLane = 1;
+  player.group.visible = true;
+  if (raceOverlay) raceOverlay.hidden = true;
+}
+
+function computeWPM() {
+  if (!race.startTime) return 0;
+  const minutes = (performance.now() - race.startTime) / 60000;
+  return minutes > 0.001 ? Math.round((race.typed / 5) / minutes) : 0;
+}
+
+function handleRaceKey(e) {
+  if (!race.active) return false;
+  const k = e.key;
+  if (k === 'Escape') { e.preventDefault(); forfeitRace(); return true; }
+  if (race.countdown > 0 || race.finished) return true; // swallow
+  if (k.length !== 1) return true; // ignore modifier-only presses
+
+  const expected = race.sentence[race.typed];
+  if (k === expected) {
+    race.typed++;
+    race.vel += RACE_SPEED_BOOST;
+    race.errorFlash = 0;
+    if (race.typed >= race.sentence.length) finishRace();
+  } else {
+    race.errors++;
+    race.vel *= RACE_ERROR_MULT;
+    race.errorFlash = performance.now() + 250;
+  }
+  updateRaceUI();
+  return true;
+}
+
+function updateRaceUI() {
+  if (!raceOverlay || !race.active) return;
+  if (race.countdown > 0) {
+    const remaining = Math.max(0, race.countdownEnd - performance.now());
+    const digit = Math.ceil(remaining / 1000);
+    if (raceCountdownEl) raceCountdownEl.textContent = digit > 0 ? String(digit) : 'GO!';
+  } else {
+    if (raceCountdownEl) raceCountdownEl.textContent = '';
+  }
+  if (raceTypedEl) raceTypedEl.textContent = race.sentence.slice(0, race.typed);
+  if (raceCursorEl) raceCursorEl.textContent = race.sentence[race.typed] || '';
+  if (raceRemainingEl) raceRemainingEl.textContent = race.sentence.slice(race.typed + 1);
+  const flash = race.errorFlash && performance.now() < race.errorFlash;
+  if (raceOverlay) raceOverlay.classList.toggle('race-error', flash);
+  if (raceStatsEl) {
+    const wpm = computeWPM();
+    raceStatsEl.textContent =
+      (race.startTime ? wpm + ' WPM' : '') +
+      (race.errors ? ' · ' + race.errors + ' error' + (race.errors > 1 ? 's' : '') : '');
+  }
+}
+
+function updateRace(dt) {
+  if (!race.active) return;
+  // Countdown phase
+  if (race.countdown > 0) {
+    const remaining = race.countdownEnd - performance.now();
+    if (remaining <= 0) {
+      race.countdown = 0;
+      race.startTime = performance.now();
+    }
+    updateRaceUI();
+  }
+  // Physics
+  race.vel *= RACE_FRICTION;
+  race.pos += race.vel * dt;
+  if (race.pos < 0) race.pos = 0;
+  if (race.animal) {
+    race.animal.position.x = RACE_START_X + race.pos;
+    animateRaceAnimal(race.animal, race.vel, dt);
+  }
+  // Peer animals: lerp toward their target
+  for (const [, pa] of race.peerAnimals) {
+    const k = Math.min(1, dt * 8);
+    pa.pos += (pa.targetPos - pa.pos) * k;
+    pa.animal.position.x = RACE_START_X + pa.pos;
+    animateRaceAnimal(pa.animal, (pa.targetPos - pa.pos) * 8, dt);
+  }
+  // Snap player pos to track during race so camera/broadcast make sense.
+  player.pos.set(RACE_CX, 0, RACE_CZ);
+  player.velY = 0;
+  player.grounded = true;
+}
+
+function checkRacePad() {
+  const dx = player.pos.x - RACE_PAD_X;
+  const dz = player.pos.z - RACE_CZ;
+  const on = (dx * dx + dz * dz) < (RACE_PAD_R * RACE_PAD_R) && player.pos.y < 1.5;
+  if (on && !race.onPad && !race.active) {
+    joinRace();
+  }
+  race.onPad = on;
+}
+
 // Orbit camera — pointer-lock mouse look.
 let camYaw = 0;
 let camPitch = 0.35;
@@ -1689,6 +2001,18 @@ const MOUSE_SENS = 0.0028;
 let pointerLocked = false;
 
 function updateCamera(dt) {
+  if (race.active) {
+    // Elevated side view of the track.
+    const tx = RACE_CX;
+    const ty = 12;
+    const tz = RACE_CZ + 16;
+    const k = Math.min(1, dt * 5);
+    camera.position.x += (tx - camera.position.x) * k;
+    camera.position.y += (ty - camera.position.y) * k;
+    camera.position.z += (tz - camera.position.z) * k;
+    camera.lookAt(RACE_CX, 0, RACE_CZ);
+    return;
+  }
   if (player.piloting && plane) {
     // Chase camera: sit behind + above the plane, looking at the nose.
     const back = new THREE.Vector3(0, 2.2, -9).applyQuaternion(plane.group.quaternion);
@@ -1876,6 +2200,7 @@ function isMenuOpen() {
 
 addEventListener('keydown', e => {
   if (isInputFocused()) return;
+  if (race.active) { e.preventDefault(); handleRaceKey(e); return; }
   const k = e.key.toLowerCase();
 
   if (wheelOpen) {
@@ -2358,6 +2683,8 @@ function broadcastSelf() {
     seated: !!player.seatedBench,
     piloting: !!player.piloting,
     parkourBest: parkour.bestMs,
+    racing: race.active && !race.finished,
+    racePos: race.pos,
   };
   // Only the current pilot broadcasts plane pose. On exit we still
   // send one final frame (piloting=false) carrying the reset base
@@ -2436,6 +2763,12 @@ async function setupMultiplayer() {
       const p = peers.get(id);
       if (p?.group) scene.remove(p.group);
       peers.delete(id);
+      // Clean up race animal if the peer was racing.
+      if (race.peerAnimals.has(id)) {
+        const pa = race.peerAnimals.get(id);
+        scene.remove(pa.animal);
+        race.peerAnimals.delete(id);
+      }
       // Free any ball the departed peer was holding so it isn't stuck.
       for (const ball of balls) {
         if (ball.holderPeerId === id) {
@@ -2471,6 +2804,8 @@ async function setupMultiplayer() {
         seated: !!data.seated,
         piloting: !!data.piloting,
         parkourBest: typeof data.parkourBest === 'number' ? data.parkourBest : null,
+        racing: !!data.racing,
+        racePos: typeof data.racePos === 'number' ? data.racePos : 0,
         renderX: prevRX,
         renderY: prevRY,
         renderZ: prevRZ,
@@ -2484,7 +2819,25 @@ async function setupMultiplayer() {
       } else if (prevName !== peer.state.username) {
         setAvatarName(peer.group, peer.state.username, peer.state.color);
       }
-      peer.group.visible = !peer.state.piloting;
+      peer.group.visible = !peer.state.piloting && !peer.state.racing;
+
+      // Peer race animals — show when they're racing and we're racing too.
+      if (peer.state.racing && race.active) {
+        if (!race.peerAnimals.has(peerId)) {
+          const c = parseInt((peer.state.color || '#ffffff').replace('#',''), 16) || 0xffffff;
+          const a = makeRaceAnimal(c);
+          const lane = race.nextPeerLane++;
+          a.position.set(RACE_START_X + peer.state.racePos, 0, laneZ(lane));
+          scene.add(a);
+          race.peerAnimals.set(peerId, { animal: a, lane, pos: 0, targetPos: peer.state.racePos });
+        } else {
+          race.peerAnimals.get(peerId).targetPos = peer.state.racePos;
+        }
+      } else if (!peer.state.racing && race.peerAnimals.has(peerId)) {
+        const pa = race.peerAnimals.get(peerId);
+        scene.remove(pa.animal);
+        race.peerAnimals.delete(peerId);
+      }
 
       // Relay the pilot's plane pose into our local plane so everyone
       // sees the same aircraft. Accept updates from a peer who is
@@ -2553,6 +2906,8 @@ function update(dt) {
     ud.emoteName = 'sit';
     ud.emoteStart = performance.now() - 500; // hold mid-pose, never expire
     animateAvatar(player.group, dt, false, true);
+  } else if (race.active) {
+    updateRace(dt);
   } else if (player.piloting) {
     updatePlane(dt);
     player.pos.set(
@@ -2566,6 +2921,7 @@ function update(dt) {
     player.grounded = true;
   } else {
     updatePlayerMovement(dt);
+    checkRacePad();
     // When a remote peer is piloting, ease the local plane toward the
     // broadcast pose so everyone sees it fly. The prop keeps spinning
     // until it's (nearly) back on the parked spot.
@@ -2637,7 +2993,7 @@ function update(dt) {
     p.group.rotation.z = Math.sin(t * 1.2 + p.group.position.z) * 0.04;
   }
 
-  if (!redirecting && !player.piloting && !player.seatedBench && performance.now() > spawnGraceUntil) {
+  if (!redirecting && !player.piloting && !player.seatedBench && !race.active && performance.now() > spawnGraceUntil) {
     for (const p of portals) {
       const dx = player.pos.x - p.group.position.x;
       const dz = player.pos.z - p.group.position.z;
