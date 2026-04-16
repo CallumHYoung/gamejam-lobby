@@ -218,6 +218,11 @@ scene.add(grid);
 // parkourPlatforms so they reuse the existing AABB collision +
 // one-way support logic. Portals can spawn on any floor (see
 // setupPortals).
+//
+// Hoisted up here so the building block below (which references it)
+// doesn't TDZ-error at module evaluation. The actual parkour spiral
+// pushes onto the same array further down.
+const parkourPlatforms = [];
 const BUILDING_HALF = 24;
 const FLOOR_Y = [0, 5, 10];
 const BUILDING_ROOF = 14;
@@ -410,7 +415,6 @@ function formatTime(ms) {
   return `${m}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
 }
 
-const parkourPlatforms = [];
 {
   const cx = 9, cz = 3;
   const steps = 12;
