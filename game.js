@@ -396,6 +396,7 @@ const race = {
   countdown: 0,
   countdownEnd: 0,
   sentence: '',
+  sentenceIdx: 0,
   typed: 0,
   errors: 0,
   pos: 0,         // 0..RACE_TRACK_LEN
@@ -410,6 +411,22 @@ const race = {
   peerAnimals: new Map(), // peerId → { animal, lane, pos, targetPos }
   nextPeerLane: 1,
 };
+
+// Sentence index cycles by wall clock so independent joiners agree
+// when nobody else is racing. Once anyone is racing, joiners inherit
+// that sentence so an in-progress race never splits across clients.
+const RACE_SENTENCE_ROTATION_MS = 60_000;
+function pickSharedSentenceIdx() {
+  for (const peer of peers.values()) {
+    if (peer.state?.racing
+        && typeof peer.state.raceSentence === 'number'
+        && peer.state.raceSentence >= 0
+        && peer.state.raceSentence < RACE_SENTENCES.length) {
+      return peer.state.raceSentence;
+    }
+  }
+  return Math.floor(Date.now() / RACE_SENTENCE_ROTATION_MS) % RACE_SENTENCES.length;
+}
 
 function makeRaceAnimal(hexColor) {
   const grp = new THREE.Group();
@@ -1990,7 +2007,8 @@ function joinRace() {
   race.active = true;
   race.countdown = 3;
   race.countdownEnd = performance.now() + 3000;
-  race.sentence = RACE_SENTENCES[Math.floor(Math.random() * RACE_SENTENCES.length)];
+  race.sentenceIdx = pickSharedSentenceIdx();
+  race.sentence = RACE_SENTENCES[race.sentenceIdx];
   race.typed = 0;
   race.errors = 0;
   race.pos = 0;
@@ -2853,6 +2871,7 @@ function broadcastSelf() {
     parkourBest: parkour.bestMs,
     racing: race.active && !race.finished,
     racePos: race.pos,
+    raceSentence: race.active ? race.sentenceIdx : null,
   };
   // Only the current pilot broadcasts plane pose. On exit we still
   // send one final frame (piloting=false) carrying the reset base
@@ -2974,6 +2993,7 @@ async function setupMultiplayer() {
         parkourBest: typeof data.parkourBest === 'number' ? data.parkourBest : null,
         racing: !!data.racing,
         racePos: typeof data.racePos === 'number' ? data.racePos : 0,
+        raceSentence: typeof data.raceSentence === 'number' ? data.raceSentence : null,
         renderX: prevRX,
         renderY: prevRY,
         renderZ: prevRZ,
