@@ -223,6 +223,7 @@ scene.add(grid);
 // doesn't TDZ-error at module evaluation. The actual parkour spiral
 // pushes onto the same array further down.
 const parkourPlatforms = [];
+const ladders = []; // { x, z, baseY, topY, faceX, faceZ, range }
 const BUILDING_HALF = 24;
 const FLOOR_Y = [0, 5, 10];
 const BUILDING_ROOF = 14;
@@ -232,24 +233,26 @@ const BUILDING_STRIP_DEPTH = 7;
 const BUILDING_WALL_T = 0.4;
 
 {
+  // Cool teal/cyan palette so the building reads distinct from the
+  // emissive purple parkour spiral nearby.
   const wallMat = new THREE.MeshStandardMaterial({
-    color: 0x180c30, emissive: 0x4b1fa0, emissiveIntensity: 0.18,
-    roughness: 0.7, metalness: 0.2,
+    color: 0x0d1b2e, emissive: 0x1d4a7a, emissiveIntensity: 0.18,
+    roughness: 0.7, metalness: 0.3,
   });
   const pillarMat = new THREE.MeshStandardMaterial({
-    color: 0x220a44, emissive: 0x6e2dd0, emissiveIntensity: 0.55,
+    color: 0x142a45, emissive: 0x4ff0ff, emissiveIntensity: 0.55,
     roughness: 0.5,
   });
   const floorMat = new THREE.MeshStandardMaterial({
-    color: 0x1a0c34, emissive: 0x32156a, emissiveIntensity: 0.22,
-    roughness: 0.65, metalness: 0.15,
+    color: 0x102338, emissive: 0x1d4a7a, emissiveIntensity: 0.25,
+    roughness: 0.6, metalness: 0.25,
   });
   const railMat = new THREE.MeshStandardMaterial({
-    color: 0x32156a, emissive: 0x9a3fff, emissiveIntensity: 0.35,
-    roughness: 0.5,
+    color: 0x1d4a7a, emissive: 0x4ff0ff, emissiveIntensity: 0.45,
+    roughness: 0.45,
   });
   const stairMat = new THREE.MeshStandardMaterial({
-    color: 0x2a1456, emissive: 0xff4fd8, emissiveIntensity: 0.18,
+    color: 0x163755, emissive: 0x4ff0ff, emissiveIntensity: 0.22,
     roughness: 0.55,
   });
 
@@ -375,6 +378,50 @@ const BUILDING_WALL_T = 0.4;
   // SW corner: stairs run eastward along the south balcony edge.
   buildStairs(FLOOR_Y[0], FLOOR_Y[1], -BUILDING_HALF + 2, BUILDING_HALF - 4, +1, 0);
   buildStairs(FLOOR_Y[1], FLOOR_Y[2], -BUILDING_HALF + 2, BUILDING_HALF - 4, +1, 0);
+
+  // --- Ladders flush against the inside of the N + S walls, away from
+  //     doorways. Visual rails + rungs; gameplay zone is registered in
+  //     `ladders` for climb-mode pickup in updatePlayerMovement.
+  const ladderRailMat = new THREE.MeshStandardMaterial({
+    color: 0x143040, emissive: 0x4ff0ff, emissiveIntensity: 0.55,
+    roughness: 0.4, metalness: 0.6,
+  });
+  function buildLadder(x, z, baseY, topY, faceAxis, faceSign) {
+    const height = topY - baseY;
+    const tangentOff = 0.35;
+    const tangentIsX = faceAxis === 'z'; // perpendicular to face axis
+    const railGeom = new THREE.CylinderGeometry(0.06, 0.06, height, 8);
+    for (const sign of [-1, +1]) {
+      const rail = new THREE.Mesh(railGeom, ladderRailMat);
+      rail.position.set(
+        x + (tangentIsX ? sign * tangentOff : 0),
+        baseY + height / 2,
+        z + (tangentIsX ? 0 : sign * tangentOff),
+      );
+      scene.add(rail);
+    }
+    const rungGeom = new THREE.CylinderGeometry(0.04, 0.04, tangentOff * 2.2, 8);
+    const rungSpacing = 0.5;
+    const rungs = Math.floor(height / rungSpacing);
+    for (let i = 0; i <= rungs; i++) {
+      const rung = new THREE.Mesh(rungGeom, ladderRailMat);
+      rung.position.set(x, baseY + i * rungSpacing, z);
+      // Default cylinder is along Y; rotate so it aligns with tangent axis.
+      if (tangentIsX) rung.rotation.z = Math.PI / 2;
+      else            rung.rotation.x = Math.PI / 2;
+      scene.add(rung);
+    }
+    ladders.push({
+      x, z, baseY, topY,
+      faceX: faceAxis === 'x' ? faceSign : 0,
+      faceZ: faceAxis === 'z' ? faceSign : 0,
+      range: 0.7,
+    });
+  }
+  // North wall: ladder hangs near the inner face, faces +Z.
+  buildLadder(10, -BUILDING_HALF + 1, FLOOR_Y[0], FLOOR_Y[2], 'z', +1);
+  // South wall: ladder faces -Z (back into the atrium).
+  buildLadder(-10, BUILDING_HALF - 1, FLOOR_Y[0], FLOOR_Y[2], 'z', -1);
 }
 
 // ------------------------------------------------------------------
@@ -2024,7 +2071,10 @@ const player = {
   ragdolling: false,
   ragdollEnd: 0,
   ragdollPitch: 0,
+  climbingLadder: null,
 };
+
+const CLIMB_SPEED = 4;
 // YXZ order so flip-pitch (rotation.x) is applied AFTER yaw, in the
 // avatar's facing-relative frame — backflips read as backflips no
 // matter which way the player happened to be looking.
@@ -3470,6 +3520,71 @@ function update(dt) {
 }
 
 function updatePlayerMovement(dt) {
+  // Climb mode: hold position on the ladder, W/S to scale up/down,
+  // jump (or top dismount) to release.
+  if (player.climbingLadder) {
+    const l = player.climbingLadder;
+    // Ease the player onto the ladder's centerline.
+    const k = Math.min(1, dt * 10);
+    player.pos.x += (l.x - player.pos.x) * k;
+    player.pos.z += (l.z - player.pos.z) * k;
+    // Face away from the wall (look at the atrium).
+    player.yaw = Math.atan2(l.faceX, l.faceZ);
+
+    let vy = 0;
+    if (!isMenuOpen()) {
+      if (keys['w'] || keys['arrowup']) vy =  CLIMB_SPEED;
+      else if (keys['s'] || keys['arrowdown']) vy = -CLIMB_SPEED;
+    }
+    player.pos.y += vy * dt;
+    player.velY = 0;
+    player.isMoving = vy !== 0;
+    player.grounded = false;
+
+    let dismounted = false;
+    // Top dismount: nudge player onto the platform above the ladder.
+    if (player.pos.y >= l.topY) {
+      player.pos.y = l.topY + 0.05;
+      player.pos.x += l.faceX * 0.7;
+      player.pos.z += l.faceZ * 0.7;
+      dismounted = true;
+    }
+    // Bottom dismount when descending past the base.
+    if (player.pos.y <= l.baseY - 0.05) {
+      player.pos.y = l.baseY;
+      dismounted = true;
+    }
+    // Jump release — push outward so we don't immediately re-engage.
+    if ((keys[' '] || keys['spacebar']) && !dismounted) {
+      player.velY = JUMP_IMPULSE;
+      player.pos.x += l.faceX * 0.6;
+      player.pos.z += l.faceZ * 0.6;
+      dismounted = true;
+    }
+    if (dismounted) player.climbingLadder = null;
+
+    player.group.position.copy(player.pos);
+    player.group.rotation.y = player.yaw;
+    player.group.rotation.x = 0;
+    animateAvatar(player.group, dt, player.isMoving, true);
+    return;
+  }
+
+  // Auto-engage when the player walks into a ladder zone, while
+  // grounded or falling. Skip if any other state mode is active.
+  if (!player.flipping && !player.ragdolling && !player.seatedBench && !player.piloting) {
+    for (const l of ladders) {
+      const dx = player.pos.x - l.x;
+      const dz = player.pos.z - l.z;
+      if (Math.abs(dx) < l.range && Math.abs(dz) < l.range
+          && player.pos.y >= l.baseY - 0.5 && player.pos.y < l.topY) {
+        player.climbingLadder = l;
+        player.velY = 0;
+        return updatePlayerMovement(dt); // re-enter with climb branch
+      }
+    }
+  }
+
   // Ragdoll: locked out, just apply gravity + render the slumped pose.
   if (player.ragdolling) {
     if (performance.now() > player.ragdollEnd) {
