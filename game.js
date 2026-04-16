@@ -212,21 +212,164 @@ grid.material.transparent = true;
 grid.material.opacity = 0.25;
 scene.add(grid);
 
-// Boundary pillars
+// Multi-story portal atrium — square 48x48 with three walkable floors,
+// central open atrium, doorways at each cardinal direction, and stair
+// runs at NE + SW corners. Floors and walls are added to
+// parkourPlatforms so they reuse the existing AABB collision +
+// one-way support logic. Portals can spawn on any floor (see
+// setupPortals).
+const BUILDING_HALF = 24;
+const FLOOR_Y = [0, 5, 10];
+const BUILDING_ROOF = 14;
+const BUILDING_DOOR_HALF = 3;
+const BUILDING_DOOR_TOP = 4;
+const BUILDING_STRIP_DEPTH = 7;
+const BUILDING_WALL_T = 0.4;
+
 {
-  const pillarGeom = new THREE.CylinderGeometry(0.25, 0.25, 3.2, 12);
-  const pillarMat = new THREE.MeshStandardMaterial({
-    color: 0x220a44,
-    emissive: 0x4b1fa0,
-    emissiveIntensity: 0.5,
-    roughness: 0.6,
+  const wallMat = new THREE.MeshStandardMaterial({
+    color: 0x180c30, emissive: 0x4b1fa0, emissiveIntensity: 0.18,
+    roughness: 0.7, metalness: 0.2,
   });
-  for (let i = 0; i < 18; i++) {
-    const a = (i / 18) * Math.PI * 2;
-    const p = new THREE.Mesh(pillarGeom, pillarMat);
-    p.position.set(Math.cos(a) * 25, 1.6, Math.sin(a) * 25);
-    scene.add(p);
+  const pillarMat = new THREE.MeshStandardMaterial({
+    color: 0x220a44, emissive: 0x6e2dd0, emissiveIntensity: 0.55,
+    roughness: 0.5,
+  });
+  const floorMat = new THREE.MeshStandardMaterial({
+    color: 0x1a0c34, emissive: 0x32156a, emissiveIntensity: 0.22,
+    roughness: 0.65, metalness: 0.15,
+  });
+  const railMat = new THREE.MeshStandardMaterial({
+    color: 0x32156a, emissive: 0x9a3fff, emissiveIntensity: 0.35,
+    roughness: 0.5,
+  });
+  const stairMat = new THREE.MeshStandardMaterial({
+    color: 0x2a1456, emissive: 0xff4fd8, emissiveIntensity: 0.18,
+    roughness: 0.55,
+  });
+
+  function addWallSegment(cx, y, cz, sx, sy, sz) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sx * 2, sy * 2, sz * 2), wallMat);
+    m.position.set(cx, y, cz);
+    scene.add(m);
+    parkourPlatforms.push({ x: cx, y, z: cz, sx, sy, sz });
   }
+
+  // --- Walls: each cardinal side gets two side panels + an over-door header.
+  function buildWallPair(axis, side) {
+    const halfLen = BUILDING_HALF;
+    const sideHalfLen = (halfLen - BUILDING_DOOR_HALF) / 2;
+    const sideOffset = (BUILDING_DOOR_HALF + halfLen) / 2;
+    for (const dir of [-1, +1]) {
+      let cx, cz, sx, sz;
+      if (axis === 'x') {
+        cx = dir * sideOffset;
+        cz = side * (BUILDING_HALF - BUILDING_WALL_T / 2);
+        sx = sideHalfLen; sz = BUILDING_WALL_T / 2;
+      } else {
+        cx = side * (BUILDING_HALF - BUILDING_WALL_T / 2);
+        cz = dir * sideOffset;
+        sx = BUILDING_WALL_T / 2; sz = sideHalfLen;
+      }
+      addWallSegment(cx, BUILDING_ROOF / 2, cz, sx, BUILDING_ROOF / 2, sz);
+    }
+    let hcx, hcz, hsx, hsz;
+    if (axis === 'x') {
+      hcx = 0;
+      hcz = side * (BUILDING_HALF - BUILDING_WALL_T / 2);
+      hsx = BUILDING_DOOR_HALF; hsz = BUILDING_WALL_T / 2;
+    } else {
+      hcx = side * (BUILDING_HALF - BUILDING_WALL_T / 2);
+      hcz = 0;
+      hsx = BUILDING_WALL_T / 2; hsz = BUILDING_DOOR_HALF;
+    }
+    const headerH = BUILDING_ROOF - BUILDING_DOOR_TOP;
+    addWallSegment(hcx, BUILDING_DOOR_TOP + headerH / 2, hcz, hsx, headerH / 2, hsz);
+  }
+  buildWallPair('x', -1);
+  buildWallPair('x', +1);
+  buildWallPair('z', -1);
+  buildWallPair('z', +1);
+
+  // --- Corner pillars (visual + accent lighting cue).
+  for (const cx of [-BUILDING_HALF, +BUILDING_HALF]) {
+    for (const cz of [-BUILDING_HALF, +BUILDING_HALF]) {
+      const p = new THREE.Mesh(new THREE.BoxGeometry(0.7, BUILDING_ROOF, 0.7), pillarMat);
+      p.position.set(cx, BUILDING_ROOF / 2, cz);
+      scene.add(p);
+    }
+  }
+
+  // --- Upper-floor balconies (annulus visual + 4 axis-aligned strips
+  //     for collision/support).
+  function buildFloorRing(floorTopY) {
+    const sliceSY = 0.075;
+    const center = floorTopY - sliceSY;
+    const innerEdge = BUILDING_HALF - BUILDING_STRIP_DEPTH;
+    const stripCenter = (BUILDING_HALF + innerEdge) / 2;
+    const stripHalfDepth = BUILDING_STRIP_DEPTH / 2;
+    const stripHalfLen = BUILDING_HALF;
+
+    const ringMesh = new THREE.Mesh(
+      new THREE.RingGeometry(innerEdge, BUILDING_HALF, 48),
+      floorMat
+    );
+    ringMesh.rotation.x = -Math.PI / 2;
+    ringMesh.position.y = floorTopY + 0.002;
+    scene.add(ringMesh);
+
+    parkourPlatforms.push({ x: 0, y: center, z: -stripCenter, sx: stripHalfLen, sy: sliceSY, sz: stripHalfDepth });
+    parkourPlatforms.push({ x: 0, y: center, z:  stripCenter, sx: stripHalfLen, sy: sliceSY, sz: stripHalfDepth });
+    parkourPlatforms.push({ x:  stripCenter, y: center, z: 0, sx: stripHalfDepth, sy: sliceSY, sz: stripHalfLen });
+    parkourPlatforms.push({ x: -stripCenter, y: center, z: 0, sx: stripHalfDepth, sy: sliceSY, sz: stripHalfLen });
+
+    const railH = 0.9;
+    const railThick = 0.08;
+    function makeRail(cx, cz, lenAxis) {
+      const w = lenAxis === 'x' ? innerEdge * 2 : railThick;
+      const d = lenAxis === 'x' ? railThick : innerEdge * 2;
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, railH, d), railMat);
+      m.position.set(cx, floorTopY + railH / 2, cz);
+      scene.add(m);
+    }
+    makeRail(0, -innerEdge, 'x');
+    makeRail(0,  innerEdge, 'x');
+    makeRail( innerEdge, 0, 'z');
+    makeRail(-innerEdge, 0, 'z');
+  }
+  buildFloorRing(FLOOR_Y[1]);
+  buildFloorRing(FLOOR_Y[2]);
+
+  // --- Staircases: corner runs of small steps from ground → floor 2 → 3.
+  function buildStairs(fromY, toY, cornerX, cornerZ, dirX, dirZ) {
+    const steps = 6;
+    const stepRise = (toY - fromY) / steps;
+    const stepRun = 1.0;
+    const stepW = 1.6;
+    for (let i = 0; i < steps; i++) {
+      const stepTop = fromY + stepRise * (i + 1);
+      const half = stepRise / 2;
+      const cy = stepTop - half;
+      const cx = cornerX + dirX * (i * stepRun + stepRun / 2);
+      const cz = cornerZ + dirZ * (i * stepRun + stepRun / 2);
+      // Stairs run along whichever axis is non-zero.
+      const sx = dirX !== 0 ? stepRun / 2 : stepW / 2;
+      const sz = dirZ !== 0 ? stepRun / 2 : stepW / 2;
+      const m = new THREE.Mesh(
+        new THREE.BoxGeometry(sx * 2, half * 2, sz * 2),
+        stairMat
+      );
+      m.position.set(cx, cy, cz);
+      scene.add(m);
+      parkourPlatforms.push({ x: cx, y: cy, z: cz, sx, sy: half, sz });
+    }
+  }
+  // NE corner: stairs run westward along the north balcony edge.
+  buildStairs(FLOOR_Y[0], FLOOR_Y[1], BUILDING_HALF - 2, -BUILDING_HALF + 4,  -1, 0);
+  buildStairs(FLOOR_Y[1], FLOOR_Y[2], BUILDING_HALF - 2, -BUILDING_HALF + 4,  -1, 0);
+  // SW corner: stairs run eastward along the south balcony edge.
+  buildStairs(FLOOR_Y[0], FLOOR_Y[1], -BUILDING_HALF + 2, BUILDING_HALF - 4, +1, 0);
+  buildStairs(FLOOR_Y[1], FLOOR_Y[2], -BUILDING_HALF + 2, BUILDING_HALF - 4, +1, 0);
 }
 
 // ------------------------------------------------------------------
@@ -1869,8 +2012,61 @@ const player = {
   isMoving: false,
   seatedBench: null,
   piloting: false,
+  flipping: false,
+  flipPitch: 0,
+  flipAngVel: 0,
+  flipBackVx: 0,
+  flipBackVz: 0,
+  ragdolling: false,
+  ragdollEnd: 0,
+  ragdollPitch: 0,
 };
+// YXZ order so flip-pitch (rotation.x) is applied AFTER yaw, in the
+// avatar's facing-relative frame — backflips read as backflips no
+// matter which way the player happened to be looking.
+player.group.rotation.order = 'YXZ';
 scene.add(player.group);
+
+const FLIP_JUMP_IMPULSE = 12;
+const FLIP_BACK_SPEED = 5;
+// Tuned so a flat-ground flip (flight time ~1.1s) lands almost
+// exactly at one full -2π rotation. Flips off taller ledges have
+// longer flight time → over-rotation → ragdoll on landing, which
+// is the intended skill curve.
+const FLIP_ANG_VEL = -5.7;
+const FLIP_LAND_TOLERANCE = Math.PI / 3.5;
+const RAGDOLL_DURATION = 2400;
+
+function tryBackflip() {
+  if (player.flipping || player.ragdolling) return;
+  if (!player.grounded) return;
+  if (player.seatedBench || player.piloting || race.active) return;
+  dropHeldBallIfAny();
+  player.flipping = true;
+  player.flipPitch = 0;
+  player.flipAngVel = FLIP_ANG_VEL;
+  player.velY = FLIP_JUMP_IMPULSE;
+  player.grounded = false;
+  // Backward in player's facing frame
+  player.flipBackVx = -Math.sin(player.yaw) * FLIP_BACK_SPEED;
+  player.flipBackVz = -Math.cos(player.yaw) * FLIP_BACK_SPEED;
+}
+
+function startRagdoll(landingPitch) {
+  player.ragdolling = true;
+  player.ragdollEnd = performance.now() + RAGDOLL_DURATION;
+  player.ragdollPitch = landingPitch;
+  player.flipping = false;
+  player.flipBackVx = 0;
+  player.flipBackVz = 0;
+  showToast('OOF');
+}
+
+function endRagdoll() {
+  player.ragdolling = false;
+  player.flipPitch = 0;
+  player.group.rotation.x = 0;
+}
 
 const SIT_RANGE = 2.2;
 const PLANE_RANGE = 4.5;
@@ -2292,20 +2488,49 @@ async function setupPortals() {
   const here = normalizeUrl(window.location.href);
   const entries = games.filter(g => g && g.url && !here.startsWith(normalizeUrl(g.url)));
 
-  const n = Math.max(entries.length, 1);
-  const radius = 18;
-  entries.forEach((g, i) => {
-    const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
-    const hue = Math.round((i / n) * 360);
-    const color = new THREE.Color(`hsl(${hue}, 85%, 62%)`);
-    const colorHex = '#' + color.getHexString();
-    makePortal({
-      title: g.title || g.id || 'mystery game',
-      url: g.url,
-      colorHex,
-      position: new THREE.Vector3(Math.cos(angle) * radius, 2.4, Math.sin(angle) * radius),
-      thumbnailUrl: resolveThumb(g),
-      flipThumbY: !!g.thumbnailFlipY,
+  // Walk the inner perimeter of the building square. Returns a position
+  // hugging the inside of one of the four walls plus the world point
+  // the portal should face (the atrium center at the same height).
+  const PORTAL_INSET = BUILDING_HALF - 2.0;
+  const PORTAL_TANGENT_HALF = BUILDING_HALF - BUILDING_DOOR_HALF - 2.0;
+  function perimeterSlot(t, y) {
+    // t in [0,1) walks N → E → S → W
+    const u = (t * 4) % 4;
+    const side = Math.floor(u);
+    const local = (u - side) * 2 - 1; // -1..+1
+    const along = local * PORTAL_TANGENT_HALF;
+    let x, z;
+    if (side === 0)      { x = along; z = -PORTAL_INSET; }
+    else if (side === 1) { x = PORTAL_INSET; z = along; }
+    else if (side === 2) { x = along; z = PORTAL_INSET; }
+    else                 { x = -PORTAL_INSET; z = along; }
+    return new THREE.Vector3(x, y, z);
+  }
+
+  // Round-robin across the three floors, spread evenly within each floor.
+  const FLOORS = FLOOR_Y.length;
+  const buckets = Array.from({ length: FLOORS }, () => []);
+  entries.forEach((g, i) => buckets[i % FLOORS].push(g));
+
+  const totalN = Math.max(entries.length, 1);
+  let order = 0;
+  buckets.forEach((floorGames, floorIdx) => {
+    const py = FLOOR_Y[floorIdx] + 2.4;
+    floorGames.forEach((g, j) => {
+      // Stagger starting offsets per floor so portals don't stack vertically.
+      const t = ((j + 0.5) / floorGames.length + floorIdx * 0.08) % 1;
+      const hue = Math.round((order / totalN) * 360);
+      const color = new THREE.Color(`hsl(${hue}, 85%, 62%)`);
+      const colorHex = '#' + color.getHexString();
+      makePortal({
+        title: g.title || g.id || 'mystery game',
+        url: g.url,
+        colorHex,
+        position: perimeterSlot(t, py),
+        thumbnailUrl: resolveThumb(g),
+        flipThumbY: !!g.thumbnailFlipY,
+      });
+      order++;
     });
   });
 
@@ -2379,6 +2604,7 @@ addEventListener('keydown', e => {
   if (k === 'n')                   { e.preventDefault(); openNameInput(); return; }
   if (k === 'y')                   { e.preventDefault(); openEmoteWheel(); return; }
   if (k === 'm')                   { e.preventDefault(); toggleMute(); return; }
+  if (k === 'q')                   { e.preventDefault(); tryBackflip(); return; }
   if (k === 'e') {
     e.preventDefault();
     if (player.piloting)          { exitPlane(); return; }
@@ -3185,7 +3411,10 @@ function update(dt) {
     for (const p of portals) {
       const dx = player.pos.x - p.group.position.x;
       const dz = player.pos.z - p.group.position.z;
-      if (Math.hypot(dx, dz) < p.radius) {
+      // Player chest height vs portal centre — keeps an upper-floor
+      // portal from triggering when the player walks under it.
+      const dy = (player.pos.y + 1.0) - p.group.position.y;
+      if (Math.hypot(dx, dz) < p.radius && Math.abs(dy) < p.radius) {
         redirecting = true;
         Portal.sendPlayerThroughPortal(p.url, {
           username,
@@ -3230,9 +3459,34 @@ function update(dt) {
 }
 
 function updatePlayerMovement(dt) {
+  // Ragdoll: locked out, just apply gravity + render the slumped pose.
+  if (player.ragdolling) {
+    if (performance.now() > player.ragdollEnd) {
+      endRagdoll();
+    } else {
+      player.velY -= GRAVITY * dt;
+      const desiredY = player.pos.y + player.velY * dt;
+      const support = supportHeightAt(player.pos.x, player.pos.z, player.pos.y);
+      if (desiredY <= support) {
+        player.pos.y = support; player.velY = 0; player.grounded = true;
+      } else {
+        player.pos.y = desiredY; player.grounded = false;
+      }
+      player.isMoving = false;
+      player.group.position.copy(player.pos);
+      player.group.rotation.y = player.yaw;
+      // Lock the avatar at whatever angle they crashed in, with a
+      // tiny jiggle so it reads as "floored" rather than frozen.
+      const jig = Math.sin(performance.now() * 0.012) * 0.04;
+      player.group.rotation.x = player.ragdollPitch + jig;
+      animateAvatar(player.group, dt, false, true);
+      return;
+    }
+  }
+
   // Movement is camera-relative: W = toward where the camera looks.
   let iFwd = 0, iRight = 0;
-  if (!isMenuOpen()) {
+  if (!isMenuOpen() && !player.flipping) {
     if (keys['w'] || keys['arrowup'])    iFwd  += 1;
     if (keys['s'] || keys['arrowdown'])  iFwd  -= 1;
     if (keys['d'] || keys['arrowright']) iRight += 1;
@@ -3260,6 +3514,12 @@ function updatePlayerMovement(dt) {
     player.yaw += diff * Math.min(1, dt * 12);
   }
 
+  // Backflip in flight: spin pitch and drift backward.
+  if (player.flipping) {
+    player.flipPitch += player.flipAngVel * dt;
+    resolveHorizontal(player.flipBackVx * dt, player.flipBackVz * dt);
+  }
+
   // Vertical physics — gravity + one-way platform collision.
   player.velY -= GRAVITY * dt;
   const desiredY = player.pos.y + player.velY * dt;
@@ -3267,7 +3527,23 @@ function updatePlayerMovement(dt) {
   if (desiredY <= support) {
     player.pos.y = support;
     player.velY = 0;
+    const wasAirborne = !player.grounded;
     player.grounded = true;
+    // Resolve flip on landing: feet-down within ±FLIP_LAND_TOLERANCE
+    // of any 2π multiple → safe; otherwise bail into a ragdoll.
+    if (player.flipping && wasAirborne) {
+      const twoPi = Math.PI * 2;
+      const norm = ((player.flipPitch % twoPi) + twoPi) % twoPi;
+      const distToUp = Math.min(norm, twoPi - norm);
+      if (distToUp <= FLIP_LAND_TOLERANCE) {
+        player.flipping = false;
+        player.flipPitch = 0;
+        player.flipBackVx = 0;
+        player.flipBackVz = 0;
+      } else {
+        startRagdoll(norm > Math.PI ? norm - twoPi : norm);
+      }
+    }
   } else {
     player.pos.y = desiredY;
     player.grounded = false;
@@ -3275,6 +3551,7 @@ function updatePlayerMovement(dt) {
 
   player.group.position.copy(player.pos);
   player.group.rotation.y = player.yaw;
+  player.group.rotation.x = player.flipping ? player.flipPitch : 0;
   animateAvatar(player.group, dt, player.isMoving, player.grounded);
 }
 
