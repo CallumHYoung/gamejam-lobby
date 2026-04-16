@@ -192,6 +192,9 @@ function updateDayNight(nowSec) {
     lamp.light.visible = n > 0.02;
     lamp.bulbMat.emissiveIntensity = 0.08 + n * 1.1;
   }
+  for (const sky of skyscrapers) {
+    sky.mat.emissiveIntensity = 0.08 + n * 1.4;
+  }
 }
 
 // Floor
@@ -350,6 +353,7 @@ const balls = [];
 const hoops = [];
 const benches = []; // { x, z, yaw, sitY }
 let plane = null;   // { group, prop, basePos, baseYaw, pitch }
+const skyscrapers = []; // window emissive ramps with the night cycle
 
 // ------------------------------------------------------------------
 // Type-racing arena
@@ -1270,6 +1274,95 @@ function collideBallWithPlayer(ball) {
     scene.add(racePad);
 
     makeLamp(RACE_PAD_X, RACE_CZ + 10);
+  }
+
+  // ---------- Skyscrapers (distant ring) ----------
+  // Procedural buildings beyond the play area. Each gets a tiled
+  // window emissive map; updateDayNight ramps them up at night.
+  {
+    function makeWindowTexture() {
+      const W = 64, H = 128;
+      const c = document.createElement('canvas');
+      c.width = W; c.height = H;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, W, H);
+      const cols = 4, rows = 16;
+      const cellW = W / cols, cellH = H / rows;
+      for (let r = 0; r < rows; r++) {
+        for (let cIdx = 0; cIdx < cols; cIdx++) {
+          if (Math.random() < 0.55) {
+            // Warm yellows, cool blue-whites, the occasional pink.
+            const roll = Math.random();
+            ctx.fillStyle = roll < 0.55 ? '#ffd88a'
+                           : roll < 0.85 ? '#aedcff'
+                           : '#ff8fd8';
+            const pad = 3;
+            ctx.fillRect(
+              cIdx * cellW + pad, r * cellH + pad,
+              cellW - pad * 2, cellH - pad * 2,
+            );
+          }
+        }
+      }
+      const tex = new THREE.CanvasTexture(c);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    function makeSkyscraper(x, z, w, h, d) {
+      const tex = makeWindowTexture();
+      // Roughly one window column per 1.5m wide, one row per 2m tall.
+      tex.repeat.set(Math.max(1, Math.round(w / 3)), Math.max(2, Math.round(h / 4)));
+      tex.needsUpdate = true;
+      const baseHue = 0x12101e + Math.floor(Math.random() * 0x101010);
+      const mat = new THREE.MeshStandardMaterial({
+        color: baseHue,
+        roughness: 0.85,
+        metalness: 0.15,
+        emissive: 0xffffff,
+        emissiveMap: tex,
+        emissiveIntensity: 0.08,
+      });
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      mesh.position.set(x, h / 2, z);
+      // Random yaw so faces don't all line up — gives the skyline depth.
+      mesh.rotation.y = Math.random() * Math.PI * 2;
+      scene.add(mesh);
+      // Optional rooftop antenna / spire on the taller buildings.
+      if (h > 55 && Math.random() < 0.55) {
+        const spire = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.25, 0.7, 6, 8),
+          new THREE.MeshStandardMaterial({
+            color: 0x222033, emissive: 0xff4fd8, emissiveIntensity: 0.4,
+          })
+        );
+        spire.position.set(x, h + 3, z);
+        spire.rotation.y = mesh.rotation.y;
+        scene.add(spire);
+      }
+      skyscrapers.push({ mat });
+    }
+
+    // Spread ~32 buildings around the perimeter at randomized distances.
+    // Skip the wedge facing each existing sector portal so we don't
+    // wall off the airfield approach with a tower.
+    const COUNT = 36;
+    for (let i = 0; i < COUNT; i++) {
+      const baseAngle = (i / COUNT) * Math.PI * 2;
+      const angle = baseAngle + (Math.random() - 0.5) * 0.18;
+      const dist = 92 + Math.random() * 60;
+      const x = Math.cos(angle) * dist;
+      const z = Math.sin(angle) * dist;
+      const w = 7 + Math.random() * 12;
+      const d = 7 + Math.random() * 12;
+      // Inner ring shorter, outer ring taller for skyline depth.
+      const tallness = (dist - 92) / 60;
+      const h = 22 + Math.random() * 30 + tallness * 50;
+      makeSkyscraper(x, z, w, h, d);
+    }
   }
 }
 
