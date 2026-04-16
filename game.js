@@ -3102,6 +3102,10 @@ function broadcastSelf() {
     racing: race.active && !race.finished,
     racePos: race.pos,
     raceSentence: race.active ? race.sentenceIdx : null,
+    // Avatar pitch — backflip in flight or slumped angle while ragdolled.
+    pitch: player.flipping ? player.flipPitch
+         : player.ragdolling ? player.ragdollPitch
+         : 0,
   };
   // Only the current pilot broadcasts plane pose. On exit we still
   // send one final frame (piloting=false) carrying the reset base
@@ -3224,12 +3228,14 @@ async function setupMultiplayer() {
         racing: !!data.racing,
         racePos: typeof data.racePos === 'number' ? data.racePos : 0,
         raceSentence: typeof data.raceSentence === 'number' ? data.raceSentence : null,
+        pitch: typeof data.pitch === 'number' ? data.pitch : 0,
         renderX: prevRX,
         renderY: prevRY,
         renderZ: prevRZ,
       };
       if (!peer.group) {
         peer.group = makeAvatar(peer.state.color, peer.state.username);
+        peer.group.rotation.order = 'YXZ';
         peer.group.position.set(peer.state.x, peer.state.y, peer.state.z);
         peer.group.rotation.y = peer.state.yaw;
         scene.add(peer.group);
@@ -3441,6 +3447,7 @@ function update(dt) {
     peer.group.position.y = peer.state.renderY;
     peer.group.position.z = peer.state.renderZ;
     peer.group.rotation.y = peer.state.yaw;
+    peer.group.rotation.x = peer.state.pitch || 0;
     if (peer.state.seated) {
       const pud = peer.group.userData;
       pud.emoteName = 'sit';
