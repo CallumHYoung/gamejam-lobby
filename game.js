@@ -2715,38 +2715,57 @@ function updateParkour(dt) {
 updateScoresHUD();
 renderLeaderboard();
 
-// Background music — loops quietly, mute via M or the button.
-// Browser autoplay rules need a user gesture, so we also kick the
-// playback off on the first pointerdown/keydown after load.
+// Background music — loops quietly, mute via M or the button, volume
+// via the slider next to it. Browser autoplay rules need a user
+// gesture, so we also kick playback off on the first pointerdown /
+// keydown after load.
 const bgmEl = document.getElementById('bgm');
 const muteBtn = document.getElementById('mute-btn');
+const volumeSlider = document.getElementById('volume-slider');
 let bgmMuted = false;
+let bgmVolume = 0.35;
 try { bgmMuted = localStorage.getItem('lobby:bgmMuted') === '1'; } catch {}
+try {
+  const v = parseFloat(localStorage.getItem('lobby:bgmVolume') ?? '');
+  if (!Number.isNaN(v) && v >= 0 && v <= 1) bgmVolume = v;
+} catch {}
 
-function applyMute() {
-  if (bgmEl) bgmEl.muted = bgmMuted;
+function applyAudio() {
+  if (bgmEl) {
+    bgmEl.muted = bgmMuted;
+    bgmEl.volume = bgmVolume;
+  }
   if (muteBtn) {
     muteBtn.textContent = bgmMuted ? '🔇' : '🔊';
     muteBtn.classList.toggle('muted', bgmMuted);
     muteBtn.title = bgmMuted ? 'unmute music (M)' : 'mute music (M)';
     muteBtn.setAttribute('aria-label', muteBtn.title);
   }
+  if (volumeSlider) {
+    if (parseFloat(volumeSlider.value) !== bgmVolume) volumeSlider.value = String(bgmVolume);
+    volumeSlider.classList.toggle('muted', bgmMuted);
+  }
 }
 function toggleMute() {
   bgmMuted = !bgmMuted;
   try { localStorage.setItem('lobby:bgmMuted', bgmMuted ? '1' : '0'); } catch {}
-  applyMute();
+  applyAudio();
   // Re-kick playback if the user unmutes before the first real gesture
   // has landed on the <audio> element.
   if (!bgmMuted) tryPlayBgm();
 }
+function setBgmVolume(v) {
+  bgmVolume = Math.max(0, Math.min(1, v));
+  try { localStorage.setItem('lobby:bgmVolume', String(bgmVolume)); } catch {}
+  applyAudio();
+}
 function tryPlayBgm() {
   if (!bgmEl) return;
-  bgmEl.volume = 0.35;
+  bgmEl.volume = bgmVolume;
   const p = bgmEl.play();
   if (p && typeof p.catch === 'function') p.catch(() => {});
 }
-applyMute();
+applyAudio();
 tryPlayBgm();
 
 const bgmGestureKick = () => {
@@ -2761,6 +2780,16 @@ if (muteBtn) muteBtn.addEventListener('click', e => {
   e.stopPropagation();
   toggleMute();
 });
+
+if (volumeSlider) {
+  volumeSlider.addEventListener('input', e => {
+    setBgmVolume(parseFloat(e.target.value));
+  });
+  // Don't let drags on the slider start/stop pointer-lock or count
+  // as a "first gesture" that flips game state.
+  volumeSlider.addEventListener('pointerdown', e => e.stopPropagation());
+  volumeSlider.addEventListener('mousedown', e => e.stopPropagation());
+}
 
 function broadcastSelf() {
   if (!sendState) return;

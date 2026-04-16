@@ -10,7 +10,10 @@
 <canvas id="game"></canvas>
 
 <audio id="bgm" src="Portal%20Lobby%20Drift.mp3" loop preload="auto"></audio>
-<button id="mute-btn" type="button" title="mute music (M)" aria-label="mute music">🔊</button>
+<div id="audio-controls">
+  <button id="mute-btn" type="button" title="mute music (M)" aria-label="mute music">🔊</button>
+  <input id="volume-slider" type="range" min="0" max="1" step="0.01" value="0.35" aria-label="music volume" title="music volume" />
+</div>
 
 <div id="hud">
   <div id="username-row">
