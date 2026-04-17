@@ -3000,6 +3000,7 @@ function checkRacePad() {
 // Orbit camera — pointer-lock mouse look.
 let camYaw = 0;
 let camPitch = 0.35;
+let camLocked = false; // V key — lock camera behind the player's forward direction
 let camDistance = 6;
 const CAM_PITCH_MIN = -0.15;
 const CAM_PITCH_MAX = 1.2;
@@ -3045,6 +3046,16 @@ function updateCamera(dt) {
     camera.lookAt(plane.group.position.x, plane.group.position.y, plane.group.position.z);
     return;
   }
+  // When camera-lock is on, smoothly track the player's facing so
+  // the camera always sits behind them.
+  if (camLocked && player.isMoving) {
+    let targetYaw = player.yaw + Math.PI;
+    let diff = targetYaw - camYaw;
+    while (diff >  Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    camYaw += diff * Math.min(1, dt * 8);
+  }
+
   // Use the interpolated render position so the camera is smooth
   // between fixed 60 Hz physics ticks on high-refresh displays.
   const rp = renderPlayerPos;
@@ -3286,6 +3297,7 @@ addEventListener('keydown', e => {
   if (k === 'n')                   { e.preventDefault(); openNameInput(); return; }
   if (k === 'y')                   { e.preventDefault(); openEmoteWheel(); return; }
   if (k === 'm')                   { e.preventDefault(); toggleMute(); return; }
+  if (k === 'v')                   { e.preventDefault(); camLocked = !camLocked; showToast(camLocked ? 'Camera locked' : 'Camera free'); return; }
   if (k === 'q')                   { e.preventDefault(); tryBackflip(); return; }
   if (k === 'e') {
     e.preventDefault();
