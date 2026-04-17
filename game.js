@@ -4160,11 +4160,30 @@ function updatePlayerMovement(dt) {
   animateAvatar(player.group, dt, player.isMoving, player.grounded);
 }
 
+// Fixed-timestep physics: game physics always ticks at 60 Hz so
+// players on 60 Hz, 144 Hz, and 240 Hz monitors all move identically.
+// Camera and rendering run at the native refresh rate for smooth visuals.
+const FIXED_DT = 1 / 60;
+let physicsAccum = 0;
+
 function loop() {
-  const dt = Math.min(0.05, clock.getDelta());
-  update(dt);
+  const frameDt = Math.min(0.1, clock.getDelta());
+  physicsAccum += frameDt;
+
+  // Step physics in fixed increments. Cap at 4 steps per frame to
+  // prevent a spiral-of-death if the tab was backgrounded.
+  let steps = 0;
+  while (physicsAccum >= FIXED_DT && steps < 4) {
+    update(FIXED_DT);
+    physicsAccum -= FIXED_DT;
+    steps++;
+  }
+  // If we hit the cap, discard leftover time so we don't keep falling
+  // behind after an alt-tab.
+  if (steps >= 4) physicsAccum = 0;
+
   updateDayNight(performance.now() / 1000);
-  updateCamera(dt);
+  updateCamera(frameDt);
   updateAimGuide();
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
