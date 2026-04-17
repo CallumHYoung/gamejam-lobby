@@ -4576,8 +4576,9 @@ function loop() {
     c.group.position.z = renderCarZ;
     c.group.rotation.y = renderCarYaw;
   }
-  // Smooth the avatar mesh position to match.
-  if (!player.piloting && player.driving === null) {
+  // Smooth the avatar mesh position to match. Skip when seated —
+  // the sit pose sets an exact position that interpolation would fight.
+  if (!player.piloting && player.driving === null && !player.seatedBench) {
     player.group.position.copy(renderPlayerPos);
   }
 
