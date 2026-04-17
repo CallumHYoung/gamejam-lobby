@@ -3053,7 +3053,7 @@ function escapeHtml(s = '') {
   }[c]));
 }
 
-function formatTime(d) {
+function formatChatTime(d) {
   return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
 }
 
@@ -3063,7 +3063,7 @@ function appendToHistory(name, color, text) {
   line.innerHTML =
     `<span class="history-name" style="color:${escapeHtml(color)}">${escapeHtml(name)}:</span>` +
     `<span>${escapeHtml(text)}</span>` +
-    `<span class="history-time">${formatTime(new Date())}</span>`;
+    `<span class="history-time">${formatChatTime(new Date())}</span>`;
   chatHistory.appendChild(line);
   while (chatHistory.children.length > MAX_HISTORY_LINES) {
     chatHistory.removeChild(chatHistory.firstChild);
