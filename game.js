@@ -2208,6 +2208,8 @@ const player = {
   ragdolling: false,
   ragdollEnd: 0,
   ragdollPitch: 0,
+  knockVx: 0,
+  knockVz: 0,
   climbingLadder: null,
   driving: null, // index into cars[], or null
 };
@@ -2254,8 +2256,29 @@ function startRagdoll(landingPitch) {
   showToast('OOF');
 }
 
+function startCarHitRagdoll(nx, nz, carSpeed) {
+  if (player.ragdolling || player.driving !== null) return;
+  if (player.seatedBench) return;
+  dropHeldBallIfAny();
+  if (player.flipping) {
+    player.flipping = false;
+    player.flipBackVx = 0;
+    player.flipBackVz = 0;
+  }
+  const hitForce = Math.max(6, carSpeed * 0.9);
+  player.knockVx = nx * hitForce;
+  player.knockVz = nz * hitForce;
+  player.velY = Math.min(8, carSpeed * 0.4);
+  player.grounded = false;
+  // Tumble pitch: tilt forward in the hit direction
+  const hitAngle = Math.atan2(nx, nz);
+  startRagdoll(hitAngle > 0 ? 1.2 : -1.2);
+}
+
 function endRagdoll() {
   player.ragdolling = false;
+  player.knockVx = 0;
+  player.knockVz = 0;
   player.flipPitch = 0;
   player.group.rotation.x = 0;
 }
@@ -3832,6 +3855,26 @@ function update(dt) {
 
   updateParkour(dt);
 
+  // Car-vs-player collision: any moving car knocks the player flying.
+  if (player.driving === null && !player.ragdolling && !player.seatedBench) {
+    for (const car of cars) {
+      const carSpeed = Math.hypot(car.velX, car.velZ);
+      if (carSpeed < 2) continue; // only hit at meaningful speed
+      const dx = player.pos.x - car.group.position.x;
+      const dz = player.pos.z - car.group.position.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist < 2.0 && dist > 0.01) {
+        const nx = dx / dist;
+        const nz = dz / dist;
+        startCarHitRagdoll(nx, nz, carSpeed);
+        // Push player out of the car
+        player.pos.x = car.group.position.x + nx * 2.1;
+        player.pos.z = car.group.position.z + nz * 2.1;
+        break;
+      }
+    }
+  }
+
   // Ducks drift around the pond.
   const nowS = performance.now() / 1000;
   for (const d of ducks) {
@@ -3985,6 +4028,13 @@ function updatePlayerMovement(dt) {
     if (performance.now() > player.ragdollEnd) {
       endRagdoll();
     } else {
+      // Apply knockback velocity with friction
+      if (Math.abs(player.knockVx) > 0.01 || Math.abs(player.knockVz) > 0.01) {
+        const kfric = player.grounded ? Math.exp(-4 * dt) : Math.exp(-0.5 * dt);
+        player.knockVx *= kfric;
+        player.knockVz *= kfric;
+        resolveHorizontal(player.knockVx * dt, player.knockVz * dt);
+      }
       player.velY -= GRAVITY * dt;
       const desiredY = player.pos.y + player.velY * dt;
       const support = supportHeightAt(player.pos.x, player.pos.z, player.pos.y);
