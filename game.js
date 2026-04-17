@@ -3529,6 +3529,16 @@ function broadcastSelf() {
     payload.planeYaw = plane.group.rotation.y;
     payload.planePitch = plane.pitch;
   }
+  // Car pose rides on the state channel (like the plane) so it's
+  // always in sync with the drivingCar flag — no cross-channel races.
+  if (player.driving !== null) {
+    const car = cars[player.driving];
+    payload.carX = car.group.position.x;
+    payload.carZ = car.group.position.z;
+    payload.carYaw = car.yaw;
+    payload.carVx = car.velX;
+    payload.carVz = car.velZ;
+  }
   sendState(payload);
 }
 
@@ -3714,6 +3724,29 @@ async function setupMultiplayer() {
         plane.targetYaw = data.planeYaw ?? plane.targetYaw;
         plane.targetPitch = data.planePitch ?? plane.targetPitch;
       }
+
+      // Relay the driver's car pose. Uses the state channel so it's
+      // always in sync with the drivingCar flag.
+      const carIdx = peer.state.drivingCar;
+      if (typeof carIdx === 'number' && carIdx >= 0 && carIdx < cars.length
+          && typeof data.carX === 'number') {
+        const car = cars[carIdx];
+        // Only accept if we're not the one driving this car
+        if (car.driverPeerId !== 'local') {
+          car.driverPeerId = peerId;
+          car.targetX = data.carX;
+          car.targetZ = data.carZ;
+          car.targetYaw = data.carYaw ?? car.targetYaw;
+          car.velX = data.carVx ?? 0;
+          car.velZ = data.carVz ?? 0;
+        }
+      }
+      // If peer stopped driving, free the car
+      if (carIdx === null) {
+        for (const car of cars) {
+          if (car.driverPeerId === peerId) car.driverPeerId = null;
+        }
+      }
     });
 
     getC((data, peerId) => handleChat(data, peerId, false));
@@ -3811,24 +3844,28 @@ function update(dt) {
       const airborne = (parkedDx * parkedDx + parkedDy * parkedDy + parkedDz * parkedDz) > 0.25;
       if (airborne) plane.prop.rotation.z += 35 * dt;
     }
-    // Lerp peer-driven cars toward their broadcast poses.
-    for (const car of cars) {
-      if (car.driverPeerId && car.driverPeerId !== 'local') {
-        const ck = Math.min(1, dt * 10);
-        car.group.position.x += (car.targetX - car.group.position.x) * ck;
-        car.group.position.z += (car.targetZ - car.group.position.z) * ck;
-        let cyaw = car.targetYaw - car.group.rotation.y;
-        while (cyaw >  Math.PI) cyaw -= Math.PI * 2;
-        while (cyaw < -Math.PI) cyaw += Math.PI * 2;
-        car.group.rotation.y += cyaw * ck;
-        car.yaw = car.group.rotation.y;
-        // Spin wheels while moving
-        const cdx = car.targetX - car.group.position.x;
-        const cdz = car.targetZ - car.group.position.z;
-        const cmv = Math.hypot(cdx, cdz);
-        if (cmv > 0.01) {
-          for (const w of car.wheels) w.rotation.x += cmv * 2 * dt;
-        }
+  }
+
+  // Lerp peer-driven cars toward their broadcast poses. Runs
+  // unconditionally so cars keep moving even when the local player
+  // is in a different car, seated, racing, etc.
+  for (const car of cars) {
+    if (car.driverPeerId && car.driverPeerId !== 'local') {
+      // Predict forward using last-known velocity, then lerp toward target
+      car.group.position.x += car.velX * dt;
+      car.group.position.z += car.velZ * dt;
+      const ck = Math.min(1, dt * 10);
+      car.group.position.x += (car.targetX - car.group.position.x) * ck;
+      car.group.position.z += (car.targetZ - car.group.position.z) * ck;
+      let cyaw = car.targetYaw - car.group.rotation.y;
+      while (cyaw >  Math.PI) cyaw -= Math.PI * 2;
+      while (cyaw < -Math.PI) cyaw += Math.PI * 2;
+      car.group.rotation.y += cyaw * ck;
+      car.yaw = car.group.rotation.y;
+      // Spin wheels proportional to speed
+      const carSpd = Math.hypot(car.velX, car.velZ);
+      if (carSpd > 0.1) {
+        for (const w of car.wheels) w.rotation.x += (carSpd / 0.22) * dt;
       }
     }
   }
@@ -3947,9 +3984,6 @@ function update(dt) {
   if (now - lastBroadcast > 80) {
     lastBroadcast = now;
     broadcastSelf();
-    if (player.driving !== null) {
-      broadcastCarState(player.driving, true);
-    }
   }
   if (now - lastLeaderboardRender > 500) {
     lastLeaderboardRender = now;
