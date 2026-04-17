@@ -547,6 +547,7 @@ const balls = [];
 const hoops = [];
 const benches = []; // { x, z, yaw, sitY }
 let plane = null;   // { group, prop, basePos, baseYaw, pitch }
+const cars = [];    // { group, wheels, yaw, velX, velZ, basePos, baseYaw, targetX, targetZ, targetYaw, driverPeerId }
 const skyscrapers = []; // window emissive ramps with the night cycle
 
 // ------------------------------------------------------------------
@@ -794,7 +795,7 @@ function tryTogglePickup() {
 
 // Shot speed is fixed; aim direction comes from where the camera is
 // looking, so players control arc + power purely through pitch.
-const SHOT_SPEED = 13;
+const SHOT_SPEED = 18;
 const _shotDirScratch = new THREE.Vector3();
 
 function getShotInitial() {
@@ -1483,6 +1484,142 @@ function collideBallWithPlayer(ball) {
     }
   }
 
+  // ---------- Parking lot with racecars (SW quadrant) ----------
+  {
+    const cx = -28, cz = -30;
+
+    // Asphalt pad
+    const lot = new THREE.Mesh(
+      new THREE.PlaneGeometry(16, 10),
+      new THREE.MeshStandardMaterial({ color: 0x303030, roughness: 0.85 })
+    );
+    lot.rotation.x = -Math.PI / 2;
+    lot.position.set(cx, 0.02, cz);
+    scene.add(lot);
+
+    // Parking spot lines
+    const spotLineMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, emissive: 0xcccccc, emissiveIntensity: 0.1 });
+    for (let i = 0; i < 5; i++) {
+      const line = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.12, 4.5),
+        spotLineMat
+      );
+      line.rotation.x = -Math.PI / 2;
+      line.position.set(cx - 6 + i * 3, 0.03, cz);
+      scene.add(line);
+    }
+
+    function makeCar(color, emissive, spawnX, spawnZ, spawnYaw) {
+      const grp = new THREE.Group();
+
+      const bodyMat = new THREE.MeshStandardMaterial({
+        color, emissive, emissiveIntensity: 0.25, metalness: 0.6, roughness: 0.3,
+      });
+
+      // Low body
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(1.7, 0.45, 3.4),
+        bodyMat
+      );
+      body.position.y = 0.42;
+      grp.add(body);
+
+      // Cabin / windshield
+      const glassMat = new THREE.MeshStandardMaterial({
+        color: 0x88d7ff, transparent: true, opacity: 0.5,
+        metalness: 0.5, roughness: 0.15,
+      });
+      const cabin = new THREE.Mesh(
+        new THREE.BoxGeometry(1.4, 0.4, 1.3),
+        glassMat
+      );
+      cabin.position.set(0, 0.87, -0.15);
+      grp.add(cabin);
+
+      // Spoiler
+      const darkMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.7, roughness: 0.3 });
+      const spoiler = new THREE.Mesh(
+        new THREE.BoxGeometry(1.8, 0.06, 0.35),
+        darkMat
+      );
+      spoiler.position.set(0, 0.95, -1.5);
+      grp.add(spoiler);
+      const postGeom = new THREE.CylinderGeometry(0.04, 0.04, 0.3, 6);
+      const pL = new THREE.Mesh(postGeom, darkMat);
+      pL.position.set(-0.55, 0.79, -1.5);
+      grp.add(pL);
+      const pR = new THREE.Mesh(postGeom, darkMat);
+      pR.position.set(0.55, 0.79, -1.5);
+      grp.add(pR);
+
+      // Front bumper accent
+      const bumper = new THREE.Mesh(
+        new THREE.BoxGeometry(1.5, 0.15, 0.15),
+        darkMat
+      );
+      bumper.position.set(0, 0.28, 1.75);
+      grp.add(bumper);
+
+      // Headlights
+      const lightMat = new THREE.MeshStandardMaterial({
+        color: 0xffffcc, emissive: 0xffffaa, emissiveIntensity: 0.7,
+      });
+      const hlL = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.08), lightMat);
+      hlL.position.set(-0.55, 0.45, 1.72);
+      grp.add(hlL);
+      const hlR = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.08), lightMat);
+      hlR.position.set(0.55, 0.45, 1.72);
+      grp.add(hlR);
+
+      // Taillights
+      const tailMat = new THREE.MeshStandardMaterial({
+        color: 0xff2200, emissive: 0xff2200, emissiveIntensity: 0.5,
+      });
+      const tlL = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.08), tailMat);
+      tlL.position.set(-0.55, 0.45, -1.72);
+      grp.add(tlL);
+      const tlR = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.08), tailMat);
+      tlR.position.set(0.55, 0.45, -1.72);
+      grp.add(tlR);
+
+      // Wheels
+      const wheelGeom = new THREE.CylinderGeometry(0.22, 0.22, 0.18, 14);
+      const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
+      const wheels = [];
+      const wp = [[-0.9, 0.22, 1.05], [0.9, 0.22, 1.05], [-0.9, 0.22, -1.05], [0.9, 0.22, -1.05]];
+      for (const [wx, wy, wz] of wp) {
+        const w = new THREE.Mesh(wheelGeom, wheelMat);
+        w.rotation.z = Math.PI / 2;
+        w.position.set(wx, wy, wz);
+        grp.add(w);
+        wheels.push(w);
+      }
+
+      grp.position.set(spawnX, 0, spawnZ);
+      grp.rotation.y = spawnYaw;
+      scene.add(grp);
+
+      cars.push({
+        group: grp,
+        wheels,
+        yaw: spawnYaw,
+        velX: 0,
+        velZ: 0,
+        basePos: new THREE.Vector3(spawnX, 0, spawnZ),
+        baseYaw: spawnYaw,
+        targetX: spawnX,
+        targetZ: spawnZ,
+        targetYaw: spawnYaw,
+        driverPeerId: null,
+      });
+    }
+
+    makeCar(0xe02020, 0x801010, cx - 4.5, cz, Math.PI * 0.5);   // red
+    makeCar(0x2060e0, 0x103080, cx - 1.5, cz, Math.PI * 0.5);   // blue
+    makeCar(0x20b040, 0x106020, cx + 1.5, cz, Math.PI * 0.5);   // green
+    makeCar(0xe0c020, 0x806010, cx + 4.5, cz, Math.PI * 0.5);   // yellow
+  }
+
   // ---------- Type-race track (NE quadrant) ----------
   {
     const tw = RACE_TRACK_LEN + 2;
@@ -2072,6 +2209,7 @@ const player = {
   ragdollEnd: 0,
   ragdollPitch: 0,
   climbingLadder: null,
+  driving: null, // index into cars[], or null
 };
 
 const CLIMB_SPEED = 4;
@@ -2094,7 +2232,7 @@ const RAGDOLL_DURATION = 2400;
 function tryBackflip() {
   if (player.flipping || player.ragdolling) return;
   if (!player.grounded) return;
-  if (player.seatedBench || player.piloting || race.active) return;
+  if (player.seatedBench || player.piloting || player.driving !== null || race.active) return;
   dropHeldBallIfAny();
   player.flipping = true;
   player.flipPitch = 0;
@@ -2238,6 +2376,151 @@ function updatePlane(dt) {
   }
 
   p.prop.rotation.z += (boosting ? 60 : 35) * dt;
+}
+
+// ------------------------------------------------------------------
+// Racecar driving
+// ------------------------------------------------------------------
+
+const CAR_RANGE = 3.5;
+const CAR_ACCEL = 20;
+const CAR_BRAKE = 28;
+const CAR_MAX_SPEED = 22;
+const CAR_STEER_RATE = 2.8;
+const CAR_FWD_DRAG = 0.6;   // mild forward drag
+const CAR_LAT_DRAG = 3.5;   // higher lateral drag = grip, but loose enough to drift
+const CAR_MAX_RADIUS = 68;
+
+let sendCarAction = null;
+let lastCarIdx = null;       // track which car we just exited for one final broadcast
+
+function tryEnterCar() {
+  if (player.driving !== null) return false;
+  let bestIdx = -1;
+  let bestD2 = CAR_RANGE * CAR_RANGE;
+  for (let i = 0; i < cars.length; i++) {
+    const c = cars[i];
+    if (c.driverPeerId) continue; // someone else is driving
+    const dx = player.pos.x - c.group.position.x;
+    const dz = player.pos.z - c.group.position.z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < bestD2) { bestD2 = d2; bestIdx = i; }
+  }
+  if (bestIdx < 0) return false;
+  dropHeldBallIfAny();
+  player.driving = bestIdx;
+  player.group.visible = false;
+  cars[bestIdx].driverPeerId = 'local';
+  cars[bestIdx].velX = 0;
+  cars[bestIdx].velZ = 0;
+  return true;
+}
+
+function exitCar() {
+  if (player.driving === null) return;
+  const car = cars[player.driving];
+  car.driverPeerId = null;
+  car.velX = 0;
+  car.velZ = 0;
+  // Drop player to the side of the car
+  const sideX = -Math.cos(car.yaw);
+  const sideZ = Math.sin(car.yaw);
+  player.pos.set(
+    car.group.position.x + sideX * 2.2,
+    0,
+    car.group.position.z + sideZ * 2.2,
+  );
+  player.yaw = car.yaw;
+  player.velY = 0;
+  player.grounded = true;
+  player.group.visible = true;
+  // Broadcast the parked car position
+  lastCarIdx = player.driving;
+  player.driving = null;
+  broadcastCarState(lastCarIdx, false);
+  broadcastSelf();
+}
+
+function broadcastCarState(idx, driving) {
+  if (!sendCarAction) return;
+  const car = cars[idx];
+  sendCarAction({
+    idx,
+    x: car.group.position.x,
+    z: car.group.position.z,
+    yaw: car.yaw,
+    driving,
+  });
+}
+
+function updateCar(dt) {
+  const car = cars[player.driving];
+
+  let accel = 0, steer = 0;
+  if (!isMenuOpen()) {
+    if (keys['w'] || keys['arrowup'])    accel += 1;
+    if (keys['s'] || keys['arrowdown'])  accel -= 1;
+    if (keys['a'] || keys['arrowleft'])  steer += 1;
+    if (keys['d'] || keys['arrowright']) steer -= 1;
+  }
+
+  // Speed-dependent steering: can't turn when stopped
+  const speed = Math.hypot(car.velX, car.velZ);
+  const steerFactor = Math.min(1, speed / 4);
+  car.yaw += steer * CAR_STEER_RATE * steerFactor * dt;
+
+  // Forward / backward thrust in car's facing direction
+  const fwdX = Math.sin(car.yaw);
+  const fwdZ = Math.cos(car.yaw);
+
+  if (accel > 0) {
+    car.velX += fwdX * CAR_ACCEL * dt;
+    car.velZ += fwdZ * CAR_ACCEL * dt;
+  } else if (accel < 0) {
+    car.velX -= fwdX * CAR_BRAKE * dt;
+    car.velZ -= fwdZ * CAR_BRAKE * dt;
+  }
+
+  // Decompose velocity into forward and lateral components for drift physics
+  const fwdDot = car.velX * fwdX + car.velZ * fwdZ;
+  const latX = car.velX - fwdDot * fwdX;
+  const latZ = car.velZ - fwdDot * fwdZ;
+
+  const fwdFric = Math.exp(-CAR_FWD_DRAG * dt);
+  const latFric = Math.exp(-CAR_LAT_DRAG * dt);
+  car.velX = fwdDot * fwdX * fwdFric + latX * latFric;
+  car.velZ = fwdDot * fwdZ * fwdFric + latZ * latFric;
+
+  // Speed cap
+  const newSpeed = Math.hypot(car.velX, car.velZ);
+  if (newSpeed > CAR_MAX_SPEED) {
+    const s = CAR_MAX_SPEED / newSpeed;
+    car.velX *= s;
+    car.velZ *= s;
+  }
+
+  // Move
+  car.group.position.x += car.velX * dt;
+  car.group.position.z += car.velZ * dt;
+  car.group.position.y = 0;
+
+  // World boundary
+  const r = Math.hypot(car.group.position.x, car.group.position.z);
+  if (r > CAR_MAX_RADIUS) {
+    const k = CAR_MAX_RADIUS / r;
+    car.group.position.x *= k;
+    car.group.position.z *= k;
+    const nx = car.group.position.x / CAR_MAX_RADIUS;
+    const nz = car.group.position.z / CAR_MAX_RADIUS;
+    const dot = car.velX * nx + car.velZ * nz;
+    if (dot > 0) { car.velX -= dot * nx; car.velZ -= dot * nz; }
+  }
+
+  car.group.rotation.y = car.yaw;
+
+  // Spin wheels
+  const wheelAngVel = fwdDot / 0.22;
+  for (const w of car.wheels) w.rotation.x += wheelAngVel * dt;
 }
 
 // ------------------------------------------------------------------
@@ -2418,6 +2701,18 @@ function updateCamera(dt) {
     camera.position.y += (ty - camera.position.y) * k;
     camera.position.z += (tz - camera.position.z) * k;
     camera.lookAt(RACE_CX, 0, RACE_CZ);
+    return;
+  }
+  if (player.driving !== null) {
+    // Chase camera behind the car
+    const car = cars[player.driving];
+    const behindX = car.group.position.x - Math.sin(car.yaw) * 7;
+    const behindZ = car.group.position.z - Math.cos(car.yaw) * 7;
+    const k = Math.min(1, dt * 5);
+    camera.position.x += (behindX - camera.position.x) * k;
+    camera.position.y += (3.5 - camera.position.y) * k;
+    camera.position.z += (behindZ - camera.position.z) * k;
+    camera.lookAt(car.group.position.x, 0.6, car.group.position.z);
     return;
   }
   if (player.piloting && plane) {
@@ -2661,8 +2956,10 @@ addEventListener('keydown', e => {
   if (k === 'q')                   { e.preventDefault(); tryBackflip(); return; }
   if (k === 'e') {
     e.preventDefault();
+    if (player.driving !== null)  { exitCar(); return; }
     if (player.piloting)          { exitPlane(); return; }
     if (player.seatedBench)       { standUp(); return; }
+    if (tryEnterCar())            { return; }
     if (tryEnterPlane())          { return; }
     if (trySitDown())             { return; }
     tryTogglePickup();
@@ -2671,6 +2968,7 @@ addEventListener('keydown', e => {
   if (k === ' ' || k === 'spacebar') {
     if (player.piloting) { keys[k] = true; return; } // boost throttle while flying
     e.preventDefault();
+    if (player.driving !== null) return; // no jump while driving
     if (player.seatedBench) return;
     if (player.grounded) {
       player.velY = JUMP_IMPULSE;
@@ -2732,6 +3030,22 @@ function releasePointerLock() {
 // ------------------------------------------------------------------
 
 const MAX_LOG_LINES = 10;
+const MAX_HISTORY_LINES = 80;
+const chatBox = document.getElementById('chat-box');
+const chatHistory = document.getElementById('chat-history');
+const chatToggle = document.getElementById('chat-toggle');
+let chatBoxOpen = true;
+
+chatToggle.addEventListener('click', e => {
+  e.stopPropagation();
+  chatBoxOpen = !chatBoxOpen;
+  chatBox.classList.toggle('collapsed', !chatBoxOpen);
+  chatToggle.textContent = chatBoxOpen ? '💬' : '💬';
+  if (chatBoxOpen) chatHistory.scrollTop = chatHistory.scrollHeight;
+});
+// Prevent chat box from stealing pointer lock
+chatHistory.addEventListener('mousedown', e => e.stopPropagation());
+chatHistory.addEventListener('click', e => e.stopPropagation());
 
 function escapeHtml(s = '') {
   return String(s).replace(/[&<>"']/g, c => ({
@@ -2739,7 +3053,28 @@ function escapeHtml(s = '') {
   }[c]));
 }
 
+function formatTime(d) {
+  return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+}
+
+function appendToHistory(name, color, text) {
+  const line = document.createElement('div');
+  line.className = 'history-line';
+  line.innerHTML =
+    `<span class="history-name" style="color:${escapeHtml(color)}">${escapeHtml(name)}:</span>` +
+    `<span>${escapeHtml(text)}</span>` +
+    `<span class="history-time">${formatTime(new Date())}</span>`;
+  chatHistory.appendChild(line);
+  while (chatHistory.children.length > MAX_HISTORY_LINES) {
+    chatHistory.removeChild(chatHistory.firstChild);
+  }
+  // Auto-scroll if near the bottom
+  const atBottom = chatHistory.scrollHeight - chatHistory.scrollTop - chatHistory.clientHeight < 40;
+  if (atBottom) chatHistory.scrollTop = chatHistory.scrollHeight;
+}
+
 function appendChatLine(name, color, text) {
+  // Floating notification (fades)
   const line = document.createElement('div');
   line.className = 'chat-line';
   line.innerHTML =
@@ -2751,6 +3086,9 @@ function appendChatLine(name, color, text) {
   }
   setTimeout(() => line.classList.add('fade'), 7000);
   setTimeout(() => line.remove(), 10000);
+
+  // Persistent history
+  appendToHistory(name, color, text);
 }
 
 function setBubble(avatarGroup, text, color) {
@@ -3156,6 +3494,7 @@ function broadcastSelf() {
     pitch: player.flipping ? player.flipPitch
          : player.ragdolling ? player.ragdollPitch
          : 0,
+    drivingCar: player.driving,
   };
   // Only the current pilot broadcasts plane pose. On exit we still
   // send one final frame (piloting=false) carrying the reset base
@@ -3207,6 +3546,26 @@ async function setupMultiplayer() {
     sendEmote = sendE;
     sendBallAction = sendB;
 
+    const [sendCR, getCR] = room.makeAction('car');
+    sendCarAction = sendCR;
+
+    getCR((data, peerId) => {
+      if (typeof data.idx !== 'number') return;
+      const car = cars[data.idx];
+      if (!car) return;
+      car.targetX = data.x;
+      car.targetZ = data.z;
+      car.targetYaw = data.yaw;
+      car.driverPeerId = data.driving ? peerId : null;
+      // If not driving, snap immediately so parked position is accurate
+      if (!data.driving) {
+        car.group.position.x = data.x;
+        car.group.position.z = data.z;
+        car.group.rotation.y = data.yaw;
+        car.yaw = data.yaw;
+      }
+    });
+
     getB((data, peerId) => {
       if (!data || !data.id) return;
       const ball = balls.find(b => b.id === data.id);
@@ -3239,6 +3598,10 @@ async function setupMultiplayer() {
         const pa = race.peerAnimals.get(id);
         scene.remove(pa.animal);
         race.peerAnimals.delete(id);
+      }
+      // Free any car the departed peer was driving.
+      for (const car of cars) {
+        if (car.driverPeerId === id) car.driverPeerId = null;
       }
       // Free any ball the departed peer was holding so it isn't stuck.
       for (const ball of balls) {
@@ -3279,6 +3642,7 @@ async function setupMultiplayer() {
         racePos: typeof data.racePos === 'number' ? data.racePos : 0,
         raceSentence: typeof data.raceSentence === 'number' ? data.raceSentence : null,
         pitch: typeof data.pitch === 'number' ? data.pitch : 0,
+        drivingCar: typeof data.drivingCar === 'number' ? data.drivingCar : null,
         renderX: prevRX,
         renderY: prevRY,
         renderZ: prevRZ,
@@ -3293,7 +3657,7 @@ async function setupMultiplayer() {
       } else if (prevName !== peer.state.username) {
         setAvatarName(peer.group, peer.state.username, peer.state.color);
       }
-      peer.group.visible = !peer.state.piloting && !peer.state.racing;
+      peer.group.visible = !peer.state.piloting && !peer.state.racing && peer.state.drivingCar === null;
 
       // Peer race animals — show when they're racing and we're racing too.
       if (peer.state.racing && race.active) {
@@ -3393,6 +3757,14 @@ function update(dt) {
     player.isMoving = false;
     player.velY = 0;
     player.grounded = true;
+  } else if (player.driving !== null) {
+    updateCar(dt);
+    const car = cars[player.driving];
+    player.pos.set(car.group.position.x, 0, car.group.position.z);
+    player.yaw = car.yaw;
+    player.isMoving = Math.hypot(car.velX, car.velZ) > 0.5;
+    player.velY = 0;
+    player.grounded = true;
   } else {
     updatePlayerMovement(dt);
     checkRacePad();
@@ -3415,6 +3787,26 @@ function update(dt) {
       const parkedDz = plane.group.position.z - plane.basePos.z;
       const airborne = (parkedDx * parkedDx + parkedDy * parkedDy + parkedDz * parkedDz) > 0.25;
       if (airborne) plane.prop.rotation.z += 35 * dt;
+    }
+    // Lerp peer-driven cars toward their broadcast poses.
+    for (const car of cars) {
+      if (car.driverPeerId && car.driverPeerId !== 'local') {
+        const ck = Math.min(1, dt * 10);
+        car.group.position.x += (car.targetX - car.group.position.x) * ck;
+        car.group.position.z += (car.targetZ - car.group.position.z) * ck;
+        let cyaw = car.targetYaw - car.group.rotation.y;
+        while (cyaw >  Math.PI) cyaw -= Math.PI * 2;
+        while (cyaw < -Math.PI) cyaw += Math.PI * 2;
+        car.group.rotation.y += cyaw * ck;
+        car.yaw = car.group.rotation.y;
+        // Spin wheels while moving
+        const cdx = car.targetX - car.group.position.x;
+        const cdz = car.targetZ - car.group.position.z;
+        const cmv = Math.hypot(cdx, cdz);
+        if (cmv > 0.01) {
+          for (const w of car.wheels) w.rotation.x += cmv * 2 * dt;
+        }
+      }
     }
   }
 
@@ -3467,7 +3859,7 @@ function update(dt) {
     p.group.rotation.z = Math.sin(t * 1.2 + p.group.position.z) * 0.04;
   }
 
-  if (!redirecting && !player.piloting && !player.seatedBench && !race.active && performance.now() > spawnGraceUntil) {
+  if (!redirecting && !player.piloting && !player.seatedBench && player.driving === null && !race.active && performance.now() > spawnGraceUntil) {
     for (const p of portals) {
       const dx = player.pos.x - p.group.position.x;
       const dz = player.pos.z - p.group.position.z;
@@ -3512,6 +3904,9 @@ function update(dt) {
   if (now - lastBroadcast > 80) {
     lastBroadcast = now;
     broadcastSelf();
+    if (player.driving !== null) {
+      broadcastCarState(player.driving, true);
+    }
   }
   if (now - lastLeaderboardRender > 500) {
     lastLeaderboardRender = now;
