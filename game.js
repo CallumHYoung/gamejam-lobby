@@ -1017,6 +1017,8 @@ function collideBallWithPlayer(ball) {
   broadcastBall(ball);
 }
 
+let lineMat; // hoisted so both world-setup blocks can share it
+
 {
   // Grass ground extends well beyond the lobby floor.
   const grass = new THREE.Mesh(
@@ -1027,7 +1029,7 @@ function collideBallWithPlayer(ball) {
   grass.position.y = -0.01;
   scene.add(grass);
 
-  const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
 
   // Street lamps at each sector approach — four total to stay within
   // the WebGL light budget. Their PointLight + bulb emissive ramp
@@ -3062,15 +3064,18 @@ function updateCamera(dt) {
     camera.lookAt(plane.group.position.x, plane.group.position.y, plane.group.position.z);
     return;
   }
+  // Use the interpolated render position so the camera is smooth
+  // between fixed 60 Hz physics ticks on high-refresh displays.
+  const rp = renderPlayerPos;
   const horizR = camDistance * Math.cos(camPitch);
-  const targetX = player.pos.x + Math.sin(camYaw) * horizR;
-  const targetY = player.pos.y + 1.2 + Math.sin(camPitch) * camDistance;
-  const targetZ = player.pos.z + Math.cos(camYaw) * horizR;
+  const targetX = rp.x + Math.sin(camYaw) * horizR;
+  const targetY = rp.y + 1.2 + Math.sin(camPitch) * camDistance;
+  const targetZ = rp.z + Math.cos(camYaw) * horizR;
   const k = Math.min(1, dt * 14);
   camera.position.x += (targetX - camera.position.x) * k;
   camera.position.y += (targetY - camera.position.y) * k;
   camera.position.z += (targetZ - camera.position.z) * k;
-  camera.lookAt(player.pos.x, player.pos.y + 1.2, player.pos.z);
+  camera.lookAt(rp.x, rp.y + 1.2, rp.z);
 }
 
 // Snap camera on first frame.
@@ -4532,6 +4537,10 @@ function updatePlayerMovement(dt) {
 const FIXED_DT = 1 / 60;
 let physicsAccum = 0;
 
+// Interpolation state for smooth camera between fixed physics steps.
+const prevPlayerPos = player.pos.clone();
+const renderPlayerPos = player.pos.clone();
+
 function loop() {
   const frameDt = Math.min(0.1, clock.getDelta());
   physicsAccum += frameDt;
@@ -4540,13 +4549,22 @@ function loop() {
   // prevent a spiral-of-death if the tab was backgrounded.
   let steps = 0;
   while (physicsAccum >= FIXED_DT && steps < 4) {
+    prevPlayerPos.copy(player.pos);
     update(FIXED_DT);
     physicsAccum -= FIXED_DT;
     steps++;
   }
-  // If we hit the cap, discard leftover time so we don't keep falling
-  // behind after an alt-tab.
   if (steps >= 4) physicsAccum = 0;
+
+  // Interpolate player render position between last two physics
+  // frames so the camera and avatar don't stutter at native refresh
+  // rates above 60 Hz.
+  const alpha = physicsAccum / FIXED_DT;
+  renderPlayerPos.lerpVectors(prevPlayerPos, player.pos, alpha);
+  // Smooth the avatar mesh position to match.
+  if (!player.piloting && player.driving === null) {
+    player.group.position.copy(renderPlayerPos);
+  }
 
   updateDayNight(performance.now() / 1000);
   updateCamera(frameDt);
