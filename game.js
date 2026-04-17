@@ -3022,15 +3022,14 @@ function updateCamera(dt) {
     return;
   }
   if (player.driving !== null) {
-    // Chase camera behind the car
-    const car = cars[player.driving];
-    const behindX = car.group.position.x - Math.sin(car.yaw) * 7;
-    const behindZ = car.group.position.z - Math.cos(car.yaw) * 7;
+    // Chase camera behind the car — uses interpolated position
+    const behindX = renderCarX - Math.sin(renderCarYaw) * 7;
+    const behindZ = renderCarZ - Math.cos(renderCarYaw) * 7;
     const k = Math.min(1, dt * 5);
     camera.position.x += (behindX - camera.position.x) * k;
     camera.position.y += (3.5 - camera.position.y) * k;
     camera.position.z += (behindZ - camera.position.z) * k;
-    camera.lookAt(car.group.position.x, 0.6, car.group.position.z);
+    camera.lookAt(renderCarX, 0.6, renderCarZ);
     return;
   }
   if (player.piloting && plane) {
@@ -4522,6 +4521,9 @@ let physicsAccum = 0;
 // Interpolation state for smooth camera between fixed physics steps.
 const prevPlayerPos = player.pos.clone();
 const renderPlayerPos = player.pos.clone();
+// Car interpolation — stored as {x, z, yaw} to avoid allocating vectors.
+let prevCarX = 0, prevCarZ = 0, prevCarYaw = 0;
+let renderCarX = 0, renderCarZ = 0, renderCarYaw = 0;
 
 function loop() {
   const frameDt = Math.min(0.1, clock.getDelta());
@@ -4532,17 +4534,36 @@ function loop() {
   let steps = 0;
   while (physicsAccum >= FIXED_DT && steps < 4) {
     prevPlayerPos.copy(player.pos);
+    if (player.driving !== null) {
+      const c = cars[player.driving];
+      prevCarX = c.group.position.x;
+      prevCarZ = c.group.position.z;
+      prevCarYaw = c.yaw;
+    }
     update(FIXED_DT);
     physicsAccum -= FIXED_DT;
     steps++;
   }
   if (steps >= 4) physicsAccum = 0;
 
-  // Interpolate player render position between last two physics
-  // frames so the camera and avatar don't stutter at native refresh
-  // rates above 60 Hz.
+  // Interpolate between last two physics frames so the camera
+  // doesn't stutter at native refresh rates above 60 Hz.
   const alpha = physicsAccum / FIXED_DT;
   renderPlayerPos.lerpVectors(prevPlayerPos, player.pos, alpha);
+  if (player.driving !== null) {
+    const c = cars[player.driving];
+    renderCarX = prevCarX + (c.group.position.x - prevCarX) * alpha;
+    renderCarZ = prevCarZ + (c.group.position.z - prevCarZ) * alpha;
+    // Interpolate yaw with wrapping
+    let dy = c.yaw - prevCarYaw;
+    while (dy > Math.PI) dy -= Math.PI * 2;
+    while (dy < -Math.PI) dy += Math.PI * 2;
+    renderCarYaw = prevCarYaw + dy * alpha;
+    // Smooth the car mesh itself so the visual matches
+    c.group.position.x = renderCarX;
+    c.group.position.z = renderCarZ;
+    c.group.rotation.y = renderCarYaw;
+  }
   // Smooth the avatar mesh position to match.
   if (!player.piloting && player.driving === null) {
     player.group.position.copy(renderPlayerPos);
