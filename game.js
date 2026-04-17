@@ -1019,6 +1019,29 @@ function collideBallWithPlayer(ball) {
 
 let lineMat; // hoisted so both world-setup blocks can share it
 
+function makeLamp(x, z) {
+  const grp = new THREE.Group();
+  grp.position.set(x, 0, z);
+  const poleMat = new THREE.MeshStandardMaterial({ color: 0x2b2b33, roughness: 0.75 });
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 4, 10), poleMat);
+  pole.position.y = 2;
+  grp.add(pole);
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.1, 0.1), poleMat);
+  arm.position.set(0.45, 4, 0);
+  grp.add(arm);
+  const bulbMat = new THREE.MeshStandardMaterial({
+    color: 0xfff2c0, emissive: 0xffd88a, emissiveIntensity: 0.1,
+  });
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.24, 14, 10), bulbMat);
+  bulb.position.set(0.85, 3.95, 0);
+  grp.add(bulb);
+  const light = new THREE.PointLight(0xffd88a, 0, 16, 1.6);
+  light.position.set(0.85, 3.7, 0);
+  grp.add(light);
+  scene.add(grp);
+  streetLamps.push({ bulbMat, light });
+}
+
 {
   // Grass ground extends well beyond the lobby floor.
   const grass = new THREE.Mesh(
@@ -1031,47 +1054,6 @@ let lineMat; // hoisted so both world-setup blocks can share it
 
   lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
 
-  // Street lamps at each sector approach — four total to stay within
-  // the WebGL light budget. Their PointLight + bulb emissive ramp
-  // from off (day) to full (night) via updateDayNight.
-  function makeLamp(x, z) {
-    const grp = new THREE.Group();
-    grp.position.set(x, 0, z);
-
-    const poleMat = new THREE.MeshStandardMaterial({ color: 0x2b2b33, roughness: 0.75 });
-    const pole = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.12, 0.16, 4, 10),
-      poleMat
-    );
-    pole.position.y = 2;
-    grp.add(pole);
-
-    const arm = new THREE.Mesh(
-      new THREE.BoxGeometry(0.9, 0.1, 0.1),
-      poleMat
-    );
-    arm.position.set(0.45, 4, 0);
-    grp.add(arm);
-
-    const bulbMat = new THREE.MeshStandardMaterial({
-      color: 0xfff2c0,
-      emissive: 0xffd88a,
-      emissiveIntensity: 0.1,
-    });
-    const bulb = new THREE.Mesh(
-      new THREE.SphereGeometry(0.24, 14, 10),
-      bulbMat
-    );
-    bulb.position.set(0.85, 3.95, 0);
-    grp.add(bulb);
-
-    const light = new THREE.PointLight(0xffd88a, 0, 16, 1.6);
-    light.position.set(0.85, 3.7, 0);
-    grp.add(light);
-
-    scene.add(grp);
-    streetLamps.push({ bulbMat, light });
-  }
   makeLamp(0, -30);   // soccer approach
   makeLamp(30, 0);    // basketball approach
   makeLamp(0, 30);    // airfield approach
