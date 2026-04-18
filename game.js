@@ -546,6 +546,10 @@ const ducks = [];
 const balls = [];
 const hoops = [];
 const benches = []; // { x, z, yaw, sitY }
+// Non-ring portals (landmarks that trigger travel when walked into,
+// e.g. the jam-1 cottage). Collision is a simple XZ radius around an
+// Object3D whose world position is taken at frame time.
+const landmarkPortals = []; // { anchor: Object3D, radius, url, title }
 let plane = null;   // { group, prop, basePos, baseYaw, pitch }
 const cars = [];    // { group, wheels, yaw, velX, velZ, basePos, baseYaw, targetX, targetZ, targetYaw, driverPeerId }
 const skyscrapers = []; // window emissive ramps with the night cycle
@@ -1466,6 +1470,100 @@ function makeLamp(x, z) {
         bobPhase: Math.random() * Math.PI * 2,
       });
     }
+  }
+
+  // ---------- Jam-1 cottage (NW quadrant) ----------
+  // A one-way landmark portal into the real-jam lobby. The door acts
+  // as the trigger — walk up to it and you'll portal across.
+  {
+    const cx = -22, cz = -22;
+    const grp = new THREE.Group();
+    grp.position.set(cx, 0, cz);
+    // Face the hub center so the door opens toward the player.
+    grp.lookAt(0, 0, 0);
+    scene.add(grp);
+
+    const wallMat   = new THREE.MeshStandardMaterial({ color: 0xe8dcb8, roughness: 0.85 });
+    const roofMat   = new THREE.MeshStandardMaterial({ color: 0x8a4a3a, roughness: 0.85 });
+    const doorMat   = new THREE.MeshStandardMaterial({ color: 0x3a2014, roughness: 0.85 });
+    const trimMat   = new THREE.MeshStandardMaterial({ color: 0x5a3824, roughness: 0.8 });
+    const windowMat = new THREE.MeshStandardMaterial({
+      color: 0xfff1c2,
+      emissive: 0xffd080,
+      emissiveIntensity: 1.3,
+      roughness: 0.25,
+    });
+
+    // Walls — a 6×3×5 box. Local -Z is the front (faces origin).
+    const walls = new THREE.Mesh(new THREE.BoxGeometry(6, 3, 5), wallMat);
+    walls.position.y = 1.5;
+    grp.add(walls);
+
+    // Trim along the base.
+    const plinth = new THREE.Mesh(new THREE.BoxGeometry(6.25, 0.25, 5.25), trimMat);
+    plinth.position.y = 0.125;
+    grp.add(plinth);
+
+    // Roof — 4-sided pyramid rotated to align flats with the walls.
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(4.4, 2.4, 4), roofMat);
+    roof.position.y = 4.2;
+    roof.rotation.y = Math.PI / 4;
+    grp.add(roof);
+
+    // Door + recessed frame on the front (-Z face, since lookAt pointed
+    // local -Z at origin).
+    const doorFrame = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.05, 0.14), trimMat);
+    doorFrame.position.set(0, 1.03, -2.53);
+    grp.add(doorFrame);
+
+    const door = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.85, 0.12), doorMat);
+    door.position.set(0, 0.93, -2.55);
+    grp.add(door);
+
+    // Warm doorway glow peeking from the seam.
+    const doorGlow = new THREE.Mesh(
+      new THREE.BoxGeometry(0.85, 1.8, 0.02),
+      new THREE.MeshBasicMaterial({ color: 0xffd080, transparent: true, opacity: 0.8 }),
+    );
+    doorGlow.position.set(0, 0.93, -2.62);
+    grp.add(doorGlow);
+
+    // Windows flanking the door.
+    const winL = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 0.1), windowMat);
+    winL.position.set(-1.95, 1.7, -2.55);
+    grp.add(winL);
+    const winR = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 0.1), windowMat);
+    winR.position.set(1.95, 1.7, -2.55);
+    grp.add(winR);
+
+    // Chimney on one side of the roof ridge.
+    const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.45, 1.1, 0.45), trimMat);
+    chimney.position.set(1.6, 4.5, 1.1);
+    grp.add(chimney);
+
+    // Warm interior-looking light leaking from the door.
+    const doorLight = new THREE.PointLight(0xffc97a, 1.6, 9);
+    doorLight.position.set(0, 1.5, -3.1);
+    grp.add(doorLight);
+
+    // Sign over the door.
+    const sign = makeLabel('jam-1 lobby', '#ffd080');
+    sign.position.set(0, 3.1, -2.6);
+    grp.add(sign);
+
+    // Invisible trigger anchor in front of the door. Keeping it as a
+    // child of the group means the rotation is applied automatically,
+    // and the main loop reads its world position each frame.
+    const trigger = new THREE.Object3D();
+    trigger.position.set(0, 0.9, -3.1);
+    grp.add(trigger);
+
+    landmarkPortals.push({
+      anchor: trigger,
+      radius: 1.5,
+      url: 'https://callumhyoung.github.io/gamejam1-lobby/',
+      title: 'jam-1 lobby',
+    });
   }
 }
 
@@ -4318,6 +4416,24 @@ function update(dt) {
           speed: player.speed,
         });
         break;
+      }
+    }
+
+    if (!redirecting) {
+      const wp = new THREE.Vector3();
+      for (const lm of landmarkPortals) {
+        lm.anchor.getWorldPosition(wp);
+        const dx = player.pos.x - wp.x;
+        const dz = player.pos.z - wp.z;
+        if (Math.hypot(dx, dz) < lm.radius) {
+          redirecting = true;
+          Portal.sendPlayerThroughPortal(lm.url, {
+            username,
+            color: incoming.color,
+            speed: player.speed,
+          });
+          break;
+        }
       }
     }
   }
